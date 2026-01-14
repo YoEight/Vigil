@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use eventql_parser::{parse_query, prelude::AnalysisOptions};
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -13,9 +14,15 @@ pub enum Error {
     IllegalSubject,
 }
 
+impl From<eventql_parser::prelude::Error> for Error {
+    fn from(value: eventql_parser::prelude::Error) -> Self {
+        Self::Query(value)
+    }
+}
+
 pub type Result<A> = std::result::Result<A, Error>;
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 pub struct Event {
     pub spec_version: String,
     pub id: Uuid,
@@ -76,5 +83,12 @@ impl Db {
         }
 
         Ok(())
+    }
+
+    pub fn query(&self, query: &str) -> Result<Vec<serde_json::Value>> {
+        let events = vec![];
+        let query = parse_query(query)?.run_static_analysis(&AnalysisOptions::default());
+
+        Ok(events)
     }
 }
