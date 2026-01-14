@@ -1,0 +1,5 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.append(\"/path/to/file\",\nvec![Event { event_type: \"user-created\".to_string(), ..Default::default() }])"
+---
+Err: IllegalSubject
