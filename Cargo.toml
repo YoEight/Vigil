@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/vigil-core"]
+
+[workspace.package]
+version = "0.1.0"
+authors = [ "Yorick Laupa <yo.eight@gmail.com>" ]
+readme = "README.md"
+edition  = "2024"
+license = "Apache-2.0"
