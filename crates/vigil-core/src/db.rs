@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, VecDeque, hash_map},
+    slice,
+    str::Split,
+};
 
 use eventql_parser::{parse_query, prelude::AnalysisOptions};
 use serde::Serialize;
@@ -51,6 +55,82 @@ impl Subject {
     }
 }
 
+pub enum Subjects<'a> {
+    Dive {
+        split: Split<'a, char>,
+        current: &'a Subject,
+    },
+
+    Browse {
+        queue: VecDeque<&'a Subject>,
+    },
+}
+
+impl<'a> Subjects<'a> {
+    pub fn new(path: &'a str, subject: &'a Subject) -> Self {
+        Self::Dive {
+            split: path.split('/'),
+            current: subject,
+        }
+    }
+}
+
+impl<'a> Iterator for Subjects<'a> {
+    type Item = &'a Subject;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self {
+                Subjects::Dive { split, current } => {
+                    let path = split.next().unwrap_or_default();
+
+                    if path.trim().is_empty() {
+                        let mut queue = VecDeque::new();
+
+                        queue.push_back(*current);
+
+                        *self = Self::Browse { queue };
+                        continue;
+                    }
+
+                    *current = current.nodes.get(path)?;
+                }
+
+                Subjects::Browse { queue } => {
+                    let current = queue.pop_front()?;
+
+                    queue.extend(current.nodes.values());
+
+                    return Some(current);
+                }
+            }
+        }
+    }
+}
+
+pub struct IndexedEvents<'a, I> {
+    indexes: I,
+    events: &'a [Event],
+}
+
+impl<'a, I> IndexedEvents<'a, I> {
+    pub fn new(indexes: I, events: &'a [Event]) -> Self {
+        Self { indexes, events }
+    }
+}
+
+impl<'a, I> Iterator for IndexedEvents<'a, I>
+where
+    I: Iterator<Item = usize> + 'a,
+{
+    type Item = &'a Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let idx = self.indexes.next()?;
+        self.events.get(idx)
+    }
+}
+
 #[derive(Default)]
 pub struct Db {
     types: HashMap<String, Vec<usize>>,
@@ -85,9 +165,28 @@ impl Db {
         Ok(())
     }
 
+    pub fn iter_types<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+        let type_events = self
+            .types
+            .get(tpe)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .copied();
+
+        IndexedEvents::new(type_events, self.events.as_slice())
+    }
+
+    pub fn iter_subject<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+        let subject_events =
+            Subjects::new(path, &self.subjects).flat_map(|sub| sub.events.iter().copied());
+
+        IndexedEvents::new(subject_events, self.events.as_slice())
+    }
+
     pub fn query(&self, query: &str) -> Result<Vec<serde_json::Value>> {
         let events = vec![];
-        let query = parse_query(query)?.run_static_analysis(&AnalysisOptions::default());
+        let query = parse_query(query)?.run_static_analysis(&AnalysisOptions::default())?;
 
         Ok(events)
     }
