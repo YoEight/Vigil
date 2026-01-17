@@ -534,6 +534,17 @@ fn evaluate_value<'a>(
                 };
             }
 
+            // --------------
+            // Conditional functions
+            // --------------
+
+            if app.func.eq_ignore_ascii_case("if")
+                && let QueryValue::Bool(b) = args[0]
+            {
+                // TODO - cloning is not necessary here as we could evaluate args lazily but that'll do for now
+                return if b { args[1].clone() } else { args[2].clone() };
+            }
+
             unreachable!(
                 "the query was statically analyzed so all the functions used in the query are known to the query planner and have their arguments properly typed"
             )
