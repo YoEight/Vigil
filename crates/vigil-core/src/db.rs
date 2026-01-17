@@ -5,6 +5,7 @@ use std::{
     str::Split,
 };
 
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
     Query, parse_query,
     prelude::{AnalysisOptions, Typed},
@@ -265,6 +266,9 @@ enum QueryValue<'a> {
     Bool(bool),
     Record(Cow<'a, HashMap<&'a str, QueryValue<'a>>>),
     Array(Cow<'a, [QueryValue<'a>]>),
+    DateTime(DateTime<Utc>),
+    Date(NaiveDate),
+    Time(NaiveTime),
 }
 
 fn evaluate_value<'a>(
@@ -468,6 +472,66 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
             {
                 return QueryValue::Bool(x.ends_with(y.as_ref()));
+            }
+
+            // -------------
+            // Date and Time functions
+            // -------------
+
+            if app.func.eq_ignore_ascii_case("now") {
+                return QueryValue::DateTime(Utc::now());
+            }
+
+            if app.func.eq_ignore_ascii_case("year") {
+                return match &args[0] {
+                    QueryValue::DateTime(t) => QueryValue::Number(t.year() as f64),
+                    QueryValue::Date(d) => QueryValue::Number(d.year() as f64),
+                    _ => unreachable!(),
+                };
+            }
+
+            if app.func.eq_ignore_ascii_case("month") {
+                return match &args[0] {
+                    QueryValue::DateTime(t) => QueryValue::Number(t.month() as f64),
+                    QueryValue::Date(d) => QueryValue::Number(d.month() as f64),
+                    _ => unreachable!(),
+                };
+            }
+
+            if app.func.eq_ignore_ascii_case("day") {
+                return match &args[0] {
+                    QueryValue::DateTime(t) => QueryValue::Number(t.day() as f64),
+                    QueryValue::Date(d) => QueryValue::Number(d.day() as f64),
+                    _ => unreachable!(),
+                };
+            }
+
+            if app.func.eq_ignore_ascii_case("hour") {
+                return match &args[0] {
+                    QueryValue::DateTime(t) => QueryValue::Number(t.hour() as f64),
+                    QueryValue::Time(t) => QueryValue::Number(t.hour() as f64),
+                    _ => unreachable!(),
+                };
+            }
+
+            if app.func.eq_ignore_ascii_case("minute") {
+                return match &args[0] {
+                    QueryValue::DateTime(t) => QueryValue::Number(t.minute() as f64),
+                    QueryValue::Time(t) => QueryValue::Number(t.minute() as f64),
+                    _ => unreachable!(),
+                };
+            }
+
+            if app.func.eq_ignore_ascii_case("weekday") {
+                return match &args[0] {
+                    QueryValue::DateTime(t) => {
+                        QueryValue::Number(t.weekday().num_days_from_sunday() as f64)
+                    }
+                    QueryValue::Date(d) => {
+                        QueryValue::Number(d.weekday().num_days_from_sunday() as f64)
+                    }
+                    _ => unreachable!(),
+                };
             }
 
             unreachable!(
