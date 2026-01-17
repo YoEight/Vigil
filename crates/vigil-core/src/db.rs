@@ -314,6 +314,10 @@ fn evaluate_value<'a>(
                 args.push(evaluate_value(env, &arg.value));
             }
 
+            // -------------
+            // Math functions
+            // ------------
+
             if app.func.eq_ignore_ascii_case("abs")
                 && let QueryValue::Number(n) = &args[0]
             {
@@ -382,6 +386,88 @@ fn evaluate_value<'a>(
 
             if app.func.eq_ignore_ascii_case("pi") {
                 return QueryValue::Number(f64::consts::PI);
+            }
+
+            // ------------
+            // String functions
+            // ------------
+
+            if app.func.eq_ignore_ascii_case("lower")
+                && let QueryValue::String(s) = &args[0]
+            {
+                return QueryValue::String(s.to_lowercase().into());
+            }
+
+            if app.func.eq_ignore_ascii_case("upper")
+                && let QueryValue::String(s) = &args[0]
+            {
+                return QueryValue::String(s.to_uppercase().into());
+            }
+
+            if app.func.eq_ignore_ascii_case("trim")
+                && let QueryValue::String(s) = &args[0]
+            {
+                return QueryValue::String(s.trim().to_owned().into());
+            }
+
+            if app.func.eq_ignore_ascii_case("ltrim")
+                && let QueryValue::String(s) = &args[0]
+            {
+                return QueryValue::String(s.trim_start().to_owned().into());
+            }
+
+            if app.func.eq_ignore_ascii_case("rtrim")
+                && let QueryValue::String(s) = &args[0]
+            {
+                return QueryValue::String(s.trim_end().to_owned().into());
+            }
+
+            if app.func.eq_ignore_ascii_case("len")
+                && let QueryValue::String(s) = &args[0]
+            {
+                return QueryValue::Number(s.len() as f64);
+            }
+
+            if app.func.eq_ignore_ascii_case("instr")
+                && let QueryValue::String(x) = &args[0]
+                && let QueryValue::String(y) = &args[1]
+            {
+                return QueryValue::Number(
+                    x.find(y.as_ref()).map(|i| i + 1).unwrap_or_default() as f64
+                );
+            }
+
+            if app.func.eq_ignore_ascii_case("substring")
+                && let QueryValue::String(s) = &args[0]
+                && let QueryValue::Number(start) = &args[1]
+                && let QueryValue::Number(length) = &args[2]
+            {
+                let start = *start as usize;
+                let length = *length as usize;
+
+                return QueryValue::String(s.chars().skip(start).take(length).collect());
+            }
+
+            if app.func.eq_ignore_ascii_case("replace")
+                && let QueryValue::String(x) = &args[0]
+                && let QueryValue::String(y) = &args[1]
+                && let QueryValue::String(z) = &args[2]
+            {
+                return QueryValue::String(x.replace(y.as_ref(), z.as_ref()).into());
+            }
+
+            if app.func.eq_ignore_ascii_case("startswith")
+                && let QueryValue::String(x) = &args[0]
+                && let QueryValue::String(y) = &args[1]
+            {
+                return QueryValue::Bool(x.starts_with(y.as_ref()));
+            }
+
+            if app.func.eq_ignore_ascii_case("endswith")
+                && let QueryValue::String(x) = &args[0]
+                && let QueryValue::String(y) = &args[1]
+            {
+                return QueryValue::Bool(x.ends_with(y.as_ref()));
             }
 
             unreachable!(
