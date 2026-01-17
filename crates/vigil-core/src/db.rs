@@ -1,10 +1,13 @@
 use std::{
     collections::{HashMap, VecDeque, hash_map},
-    slice,
+    iter, slice,
     str::Split,
 };
 
-use eventql_parser::{parse_query, prelude::AnalysisOptions};
+use eventql_parser::{
+    Query, parse_query,
+    prelude::{AnalysisOptions, Typed},
+};
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -165,7 +168,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn iter_types<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+    pub fn iter_type<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
         let type_events = self
             .types
             .get(tpe)
@@ -188,6 +191,113 @@ impl Db {
         let events = vec![];
         let query = parse_query(query)?.run_static_analysis(&AnalysisOptions::default())?;
 
+        let info = query.meta;
+
         Ok(events)
     }
+}
+
+type Row<'a> = Box<dyn Iterator<Item = Output<'a>> + 'a>;
+
+pub enum Output<'a> {
+    Event(&'a Event),
+    Record(serde_json::Map<String, serde_json::Value>),
+}
+
+#[derive(Default)]
+struct Source<'a> {
+    bindings: HashMap<&'a str, Row<'a>>,
+}
+
+type Sources<'a> = HashMap<&'a str, Row<'a>>;
+
+pub struct EventQuery<'a> {
+    srcs: Sources<'a>,
+    query: &'a Query<Typed>,
+    buffer: HashMap<&'a str, Output<'a>>,
+}
+
+impl<'a> EventQuery<'a> {
+    pub fn new(srcs: Sources<'a>, query: &'a Query<Typed>) -> Self {
+        Self {
+            srcs,
+            query,
+            buffer: Default::default(),
+        }
+    }
+}
+
+impl<'a> Iterator for EventQuery<'a> {
+    type Item = Output<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.buffer.clear();
+
+        for (binding, row) in self.srcs.iter_mut() {
+            self.buffer.insert(binding, row.next()?);
+        }
+
+        todo!()
+    }
+}
+
+struct Node<'a> {
+    value: &'a eventql_parser::Value,
+    visited: bool,
+}
+
+impl<'a> Node<'a> {
+    fn new(value: &'a eventql_parser::Value) -> Self {
+        Self {
+            value,
+            visited: false,
+        }
+    }
+}
+
+fn evaluate_predicate<'a>(
+    env: &HashMap<&'a str, Output<'a>>,
+    value: &eventql_parser::Value,
+) -> bool {
+    let mut stack = vec![Node::new(value)];
+    let mut result = false;
+
+    while let Some(node) = stack.pop() {}
+
+    result
+}
+
+fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
+    let mut srcs = Sources::new();
+    for query_src in &query.sources {
+        match &query_src.kind {
+            eventql_parser::SourceKind::Name(name) => {
+                if name.eq_ignore_ascii_case("events") {
+                    srcs.insert(
+                        &query_src.binding.name,
+                        Box::new(db.events.iter().map(Output::Event)),
+                    );
+
+                    continue;
+                }
+
+                srcs.insert(&query_src.binding.name, Box::new(iter::empty()));
+            }
+
+            eventql_parser::SourceKind::Subject(path) => {
+                srcs.insert(
+                    &query_src.binding.name,
+                    Box::new(db.iter_subject(path).map(Output::Event)),
+                );
+            }
+
+            eventql_parser::SourceKind::Subquery(sub_query) => {
+                let row = catalog(db, scope + 1, sub_query);
+
+                srcs.insert(&query_src.binding.name, row);
+            }
+        }
+    }
+
+    Box::new(EventQuery::new(srcs, query))
 }
