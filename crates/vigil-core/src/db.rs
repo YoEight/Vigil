@@ -255,16 +255,84 @@ impl<'a> Node<'a> {
     }
 }
 
+#[derive(Clone)]
+enum QueryValue<'a> {
+    Null,
+    String(&'a str),
+    Number(f64),
+    Bool(bool),
+    RecordRef(&'a HashMap<&'a str, QueryValue<'a>>),
+    Record(HashMap<&'a str, QueryValue<'a>>),
+    Array(Vec<QueryValue<'a>>),
+}
+
+fn evaluate_value<'a>(
+    env: &HashMap<&'a str, QueryValue<'a>>,
+    value: &'a eventql_parser::Value,
+) -> QueryValue<'a> {
+    match value {
+        eventql_parser::Value::Number(n) => QueryValue::Number(*n),
+        eventql_parser::Value::String(s) => QueryValue::String(s.as_str()),
+        eventql_parser::Value::Bool(b) => QueryValue::Bool(*b),
+        eventql_parser::Value::Id(id) => env.get(id.as_str()).cloned().expect("id to be defined"),
+        eventql_parser::Value::Array(exprs) => {
+            let mut arr = Vec::with_capacity(exprs.capacity());
+
+            for expr in exprs {
+                arr.push(evaluate_value(env, &expr.value));
+            }
+
+            QueryValue::Array(arr)
+        }
+
+        eventql_parser::Value::Record(fields) => {
+            let mut record = HashMap::with_capacity(fields.capacity());
+
+            for field in fields {
+                record.insert(field.name.as_str(), evaluate_value(env, &field.value.value));
+            }
+
+            QueryValue::Record(record)
+        }
+
+        eventql_parser::Value::Access(access) => match evaluate_value(env, &access.target.value) {
+            QueryValue::RecordRef(rec) => rec
+                .get(access.field.as_str())
+                .cloned()
+                .unwrap_or(QueryValue::Null),
+
+            QueryValue::Record(rec) => rec
+                .get(access.field.as_str())
+                .cloned()
+                .unwrap_or(QueryValue::Null),
+
+            _ => unreachable!(
+                "the query was statically analyzed, rendering that situation impossible"
+            ),
+        },
+
+        eventql_parser::Value::App(app) => {
+            let mut args = Vec::with_capacity(app.args.capacity());
+
+            for arg in &app.args {
+                args.push(evaluate_value(env, &arg.value));
+            }
+
+            match app.func.as_str() {
+                _ => todo!(),
+            }
+        }
+        eventql_parser::Value::Binary(binary) => todo!(),
+        eventql_parser::Value::Unary(unary) => todo!(),
+        eventql_parser::Value::Group(expr) => todo!(),
+    }
+}
+
 fn evaluate_predicate<'a>(
     env: &HashMap<&'a str, Output<'a>>,
     value: &eventql_parser::Value,
 ) -> bool {
-    let mut stack = vec![Node::new(value)];
-    let mut result = false;
-
-    while let Some(node) = stack.pop() {}
-
-    result
+    todo!()
 }
 
 fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
