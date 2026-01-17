@@ -1,6 +1,7 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, VecDeque, hash_map},
-    iter, slice,
+    f64, iter, slice,
     str::Split,
 };
 
@@ -8,6 +9,7 @@ use eventql_parser::{
     Query, parse_query,
     prelude::{AnalysisOptions, Typed},
 };
+use rand::Rng;
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -258,12 +260,11 @@ impl<'a> Node<'a> {
 #[derive(Clone)]
 enum QueryValue<'a> {
     Null,
-    String(&'a str),
+    String(Cow<'a, str>),
     Number(f64),
     Bool(bool),
-    RecordRef(&'a HashMap<&'a str, QueryValue<'a>>),
-    Record(HashMap<&'a str, QueryValue<'a>>),
-    Array(Vec<QueryValue<'a>>),
+    Record(Cow<'a, HashMap<&'a str, QueryValue<'a>>>),
+    Array(Cow<'a, [QueryValue<'a>]>),
 }
 
 fn evaluate_value<'a>(
@@ -272,7 +273,7 @@ fn evaluate_value<'a>(
 ) -> QueryValue<'a> {
     match value {
         eventql_parser::Value::Number(n) => QueryValue::Number(*n),
-        eventql_parser::Value::String(s) => QueryValue::String(s.as_str()),
+        eventql_parser::Value::String(s) => QueryValue::String(Cow::Borrowed(s.as_str())),
         eventql_parser::Value::Bool(b) => QueryValue::Bool(*b),
         eventql_parser::Value::Id(id) => env.get(id.as_str()).cloned().expect("id to be defined"),
         eventql_parser::Value::Array(exprs) => {
@@ -282,7 +283,7 @@ fn evaluate_value<'a>(
                 arr.push(evaluate_value(env, &expr.value));
             }
 
-            QueryValue::Array(arr)
+            QueryValue::Array(Cow::Owned(arr))
         }
 
         eventql_parser::Value::Record(fields) => {
@@ -292,15 +293,10 @@ fn evaluate_value<'a>(
                 record.insert(field.name.as_str(), evaluate_value(env, &field.value.value));
             }
 
-            QueryValue::Record(record)
+            QueryValue::Record(Cow::Owned(record))
         }
 
         eventql_parser::Value::Access(access) => match evaluate_value(env, &access.target.value) {
-            QueryValue::RecordRef(rec) => rec
-                .get(access.field.as_str())
-                .cloned()
-                .unwrap_or(QueryValue::Null),
-
             QueryValue::Record(rec) => rec
                 .get(access.field.as_str())
                 .cloned()
@@ -318,10 +314,81 @@ fn evaluate_value<'a>(
                 args.push(evaluate_value(env, &arg.value));
             }
 
-            match app.func.as_str() {
-                _ => todo!(),
+            if app.func.eq_ignore_ascii_case("abs")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.abs());
             }
+
+            if app.func.eq_ignore_ascii_case("ceil")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.ceil());
+            }
+
+            if app.func.eq_ignore_ascii_case("floor")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.floor());
+            }
+
+            if app.func.eq_ignore_ascii_case("floor")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.round());
+            }
+
+            if app.func.eq_ignore_ascii_case("cos")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.cos());
+            }
+
+            if app.func.eq_ignore_ascii_case("sin")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.sin());
+            }
+
+            if app.func.eq_ignore_ascii_case("tan")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.tan());
+            }
+
+            if app.func.eq_ignore_ascii_case("exp")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.exp());
+            }
+
+            if app.func.eq_ignore_ascii_case("pow")
+                && let QueryValue::Number(x) = &args[0]
+                && let QueryValue::Number(y) = &args[1]
+            {
+                return QueryValue::Number(x.powi(*y as i32));
+            }
+
+            if app.func.eq_ignore_ascii_case("sqrt")
+                && let QueryValue::Number(n) = &args[0]
+            {
+                return QueryValue::Number(n.sqrt());
+            }
+
+            if app.func.eq_ignore_ascii_case("rand") {
+                let mut rng = rand::rng();
+                return QueryValue::Number(rng.random());
+            }
+
+            if app.func.eq_ignore_ascii_case("pi") {
+                return QueryValue::Number(f64::consts::PI);
+            }
+
+            unreachable!(
+                "the query was statically analyzed so all the functions used in the query are known to the query planner and have their arguments properly typed"
+            )
         }
+
         eventql_parser::Value::Binary(binary) => todo!(),
         eventql_parser::Value::Unary(unary) => todo!(),
         eventql_parser::Value::Group(expr) => todo!(),
