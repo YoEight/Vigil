@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, VecDeque, hash_map},
+    collections::{BTreeMap, HashMap, VecDeque, hash_map},
     f64, iter, slice,
     str::Split,
 };
@@ -8,7 +8,7 @@ use std::{
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
     Query, parse_query,
-    prelude::{AnalysisOptions, Typed},
+    prelude::{AnalysisOptions, Operator, Typed},
 };
 use rand::Rng;
 use serde::Serialize;
@@ -264,11 +264,125 @@ enum QueryValue<'a> {
     String(Cow<'a, str>),
     Number(f64),
     Bool(bool),
-    Record(Cow<'a, HashMap<&'a str, QueryValue<'a>>>),
+    Record(Cow<'a, BTreeMap<&'a str, QueryValue<'a>>>),
     Array(Cow<'a, [QueryValue<'a>]>),
     DateTime(DateTime<Utc>),
     Date(NaiveDate),
     Time(NaiveTime),
+}
+
+impl QueryValue<'_> {
+    pub fn evaluate_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => a == b,
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::DateTime(a), Self::DateTime(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+
+            (Self::Record(a), Self::Record(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+
+                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
+                    if k_a != k_b || v_a.evaluate_eq(v_b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            (Self::Array(a), Self::Array(b)) => {
+                for (a, b) in a.iter().zip(b.iter()) {
+                    if !a.evaluate_eq(b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            _ => false,
+        }
+    }
+
+    /// it could have used `evaluate_eq` but the fact that `evaluate_eq` returns false
+    /// on typemismatch would make this behavior confusing. To be noted, query are typecheckec
+    /// so typemistch **shouldn't** happen. However, it's possible that we didn't have enough type info
+    /// at parsing time.
+    pub fn evaluate_neq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => a != b,
+            (Self::String(a), Self::String(b)) => a != b,
+            (Self::Bool(a), Self::Bool(b)) => a != b,
+            (Self::DateTime(a), Self::DateTime(b)) => a != b,
+            (Self::Date(a), Self::Date(b)) => a != b,
+
+            (Self::Record(a), Self::Record(b)) => {
+                if a.len() == b.len() {
+                    return false;
+                }
+
+                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
+                    if k_a == k_b || v_a.evaluate_neq(v_b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            (Self::Array(a), Self::Array(b)) => {
+                for (a, b) in a.iter().zip(b.iter()) {
+                    if !a.evaluate_neq(b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            _ => false,
+        }
+    }
+
+    pub fn evaluate_lt(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => a <= b,
+            (Self::String(a), Self::String(b)) => a <= b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::DateTime(a), Self::DateTime(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+
+            (Self::Record(a), Self::Record(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+
+                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
+                    if k_a != k_b || v_a.evaluate_eq(v_b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            (Self::Array(a), Self::Array(b)) => {
+                for (a, b) in a.iter().zip(b.iter()) {
+                    if !a.evaluate_eq(b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            _ => false,
+        }
+    }
 }
 
 fn evaluate_value<'a>(
@@ -291,7 +405,7 @@ fn evaluate_value<'a>(
         }
 
         eventql_parser::Value::Record(fields) => {
-            let mut record = HashMap::with_capacity(fields.capacity());
+            let mut record = BTreeMap::new();
 
             for field in fields {
                 record.insert(field.name.as_str(), evaluate_value(env, &field.value.value));
@@ -550,9 +664,40 @@ fn evaluate_value<'a>(
             )
         }
 
-        eventql_parser::Value::Binary(binary) => todo!(),
+        eventql_parser::Value::Binary(binary) => {
+            let lhs = evaluate_value(env, &binary.lhs.value);
+            let rhs = evaluate_value(env, &binary.rhs.value);
+
+            evaluate_binary_operation(binary.operator, &lhs, &rhs)
+        }
+
         eventql_parser::Value::Unary(unary) => todo!(),
         eventql_parser::Value::Group(expr) => todo!(),
+    }
+}
+
+fn evaluate_binary_operation<'a>(
+    op: Operator,
+    a: &QueryValue<'a>,
+    b: &QueryValue<'a>,
+) -> QueryValue<'a> {
+    match (op, a, b) {
+        (Operator::Add, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a + b),
+        (Operator::Sub, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a - b),
+        (Operator::Mul, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a * b),
+        (Operator::Div, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a / b),
+        (Operator::Eq, a, b) => QueryValue::Bool(a.evaluate_eq(b)),
+        (Operator::Neq, a, b) => QueryValue::Bool(a.evaluate_neq(b)),
+        Operator::Lt => todo!(),
+        Operator::Lte => todo!(),
+        Operator::Gt => todo!(),
+        Operator::Gte => todo!(),
+        Operator::And => todo!(),
+        Operator::Or => todo!(),
+        Operator::Xor => todo!(),
+        Operator::Not => todo!(),
+        Operator::Contains => todo!(),
+        Operator::As => todo!(),
     }
 }
 
