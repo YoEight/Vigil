@@ -272,6 +272,59 @@ enum QueryValue<'a> {
 }
 
 impl QueryValue<'_> {
+    pub fn evaluate_logical_bin_op(&self, other: &Self, op: Operator) -> Self {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => match op {
+                Operator::Add => Self::Number(a + b),
+                Operator::Sub => Self::Number(a - b),
+                Operator::Mul => Self::Number(a * b),
+                Operator::Div => Self::Number(a / b),
+                Operator::Eq => Self::Bool(a == b),
+                Operator::Neq => Self::Bool(a != b),
+                Operator::Lt => Self::Bool(a < b),
+                Operator::Lte => Self::Bool(a <= b),
+                Operator::Gt => Self::Bool(a > b),
+                Operator::Gte => Self::Bool(a >= b),
+                Operator::And => todo!(),
+                Operator::Or => todo!(),
+                Operator::Xor => todo!(),
+                Operator::Not => todo!(),
+                Operator::Contains => todo!(),
+                Operator::As => todo!(),
+            },
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::DateTime(a), Self::DateTime(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+
+            (Self::Record(a), Self::Record(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+
+                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
+                    if k_a != k_b || v_a.evaluate_eq(v_b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            (Self::Array(a), Self::Array(b)) => {
+                for (a, b) in a.iter().zip(b.iter()) {
+                    if !a.evaluate_eq(b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+
+            _ => false,
+        }
+    }
+
     pub fn evaluate_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Number(a), Self::Number(b)) => a == b,
@@ -326,7 +379,7 @@ impl QueryValue<'_> {
                 }
 
                 for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
-                    if k_a == k_b || v_a.evaluate_neq(v_b) {
+                    if k_a == k_b || !v_a.evaluate_neq(v_b) {
                         return false;
                     }
                 }
@@ -666,6 +719,13 @@ fn evaluate_value<'a>(
 
         eventql_parser::Value::Binary(binary) => {
             let lhs = evaluate_value(env, &binary.lhs.value);
+
+            if let Operator::As = binary.operator
+                && let eventql_parser::Value::Id(tpe) = &binary.rhs.value
+            {
+                return type_conversion(&lhs, todo!());
+            }
+
             let rhs = evaluate_value(env, &binary.rhs.value);
 
             evaluate_binary_operation(binary.operator, &lhs, &rhs)
@@ -674,6 +734,10 @@ fn evaluate_value<'a>(
         eventql_parser::Value::Unary(unary) => todo!(),
         eventql_parser::Value::Group(expr) => todo!(),
     }
+}
+
+fn type_conversion<'a>(value: &QueryValue<'a>, tpe: eventql_parser::Type) -> QueryValue<'a> {
+    todo!()
 }
 
 fn evaluate_binary_operation<'a>(
