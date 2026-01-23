@@ -8,7 +8,7 @@ use std::{
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
-    Query, parse_query,
+    Query, Type, parse_query,
     prelude::{AnalysisOptions, Operator, Typed},
 };
 use rand::Rng;
@@ -42,6 +42,36 @@ pub struct Event {
     pub event_type: String,
     pub datacontenttype: String,
     pub data: String,
+}
+
+impl Event {
+    fn project<'a>(&'a self, expected: &'a Type) -> QueryValue<'a> {
+        if let eventql_parser::Type::Record(rec) = expected {
+            let mut props = BTreeMap::new();
+            for (name, value) in rec.iter() {
+                match name.as_str() {
+                    "spec_version" => match value {
+                        Type::String => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.spec_version.as_str().into()),
+                            );
+                        }
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+                    _ => {
+                        props.insert(name.as_str(), QueryValue::Null);
+                    }
+                }
+            }
+
+            QueryValue::Record(Cow::Owned(props))
+        } else {
+            QueryValue::Null
+        }
+    }
 }
 
 #[derive(Default)]
@@ -201,12 +231,7 @@ impl Db {
     }
 }
 
-type Row<'a> = Box<dyn Iterator<Item = Output<'a>> + 'a>;
-
-pub enum Output<'a> {
-    Event(&'a Event),
-    Record(serde_json::Map<String, serde_json::Value>),
-}
+type Row<'a> = Box<dyn Iterator<Item = QueryValue<'a>> + 'a>;
 
 #[derive(Default)]
 struct Source<'a> {
@@ -218,7 +243,7 @@ type Sources<'a> = HashMap<&'a str, Row<'a>>;
 pub struct EventQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
-    buffer: HashMap<&'a str, Output<'a>>,
+    buffer: HashMap<&'a str, QueryValue<'a>>,
 }
 
 impl<'a> EventQuery<'a> {
@@ -232,7 +257,7 @@ impl<'a> EventQuery<'a> {
 }
 
 impl<'a> Iterator for EventQuery<'a> {
-    type Item = Output<'a>;
+    type Item = QueryValue<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.buffer.clear();
@@ -260,7 +285,7 @@ impl<'a> Node<'a> {
 }
 
 #[derive(Clone)]
-enum QueryValue<'a> {
+pub enum QueryValue<'a> {
     Null,
     String(Cow<'a, str>),
     Number(f64),
@@ -806,10 +831,11 @@ fn evaluate_binary_operation<'a>(
 }
 
 fn evaluate_predicate<'a>(
-    env: &HashMap<&'a str, Output<'a>>,
-    value: &eventql_parser::Value,
+    options: &AnalysisOptions,
+    env: &HashMap<&'a str, QueryValue<'a>>,
+    value: &'a eventql_parser::Value,
 ) -> bool {
-    todo!()
+    evaluate_value(options, env, value).as_bool_or_panic()
 }
 
 fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
@@ -817,10 +843,12 @@ fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
     for query_src in &query.sources {
         match &query_src.kind {
             eventql_parser::SourceKind::Name(name) => {
-                if name.eq_ignore_ascii_case("events") {
+                if name.eq_ignore_ascii_case("events")
+                    && let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name)
+                {
                     srcs.insert(
                         &query_src.binding.name,
-                        Box::new(db.events.iter().map(Output::Event)),
+                        Box::new(db.events.iter().map(|e| e.project(tpe))),
                     );
 
                     continue;
@@ -830,10 +858,16 @@ fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
             }
 
             eventql_parser::SourceKind::Subject(path) => {
-                srcs.insert(
-                    &query_src.binding.name,
-                    Box::new(db.iter_subject(path).map(Output::Event)),
-                );
+                if let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name) {
+                    srcs.insert(
+                        &query_src.binding.name,
+                        Box::new(db.iter_subject(path).map(|e| e.project(tpe))),
+                    );
+
+                    continue;
+                }
+
+                srcs.insert(&query_src.binding.name, Box::new(iter::empty()));
             }
 
             eventql_parser::SourceKind::Subquery(sub_query) => {
