@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     collections::{BTreeMap, HashMap, VecDeque, hash_map},
     f64, iter, slice,
     str::Split,
@@ -272,169 +273,12 @@ enum QueryValue<'a> {
 }
 
 impl QueryValue<'_> {
-    pub fn evaluate_logical_bin_op(&self, other: &Self, op: Operator) -> Self {
-        match (self, other) {
-            (Self::Number(a), Self::Number(b)) => match op {
-                Operator::Add => Self::Number(a + b),
-                Operator::Sub => Self::Number(a - b),
-                Operator::Mul => Self::Number(a * b),
-                Operator::Div => Self::Number(a / b),
-                Operator::Eq => Self::Bool(a == b),
-                Operator::Neq => Self::Bool(a != b),
-                Operator::Lt => Self::Bool(a < b),
-                Operator::Lte => Self::Bool(a <= b),
-                Operator::Gt => Self::Bool(a > b),
-                Operator::Gte => Self::Bool(a >= b),
-                Operator::And => todo!(),
-                Operator::Or => todo!(),
-                Operator::Xor => todo!(),
-                Operator::Not => todo!(),
-                Operator::Contains => todo!(),
-                Operator::As => todo!(),
-            },
-            (Self::String(a), Self::String(b)) => a == b,
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::DateTime(a), Self::DateTime(b)) => a == b,
-            (Self::Date(a), Self::Date(b)) => a == b,
-
-            (Self::Record(a), Self::Record(b)) => {
-                if a.len() != b.len() {
-                    return false;
-                }
-
-                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
-                    if k_a != k_b || v_a.evaluate_eq(v_b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            (Self::Array(a), Self::Array(b)) => {
-                for (a, b) in a.iter().zip(b.iter()) {
-                    if !a.evaluate_eq(b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            _ => false,
+    pub fn as_bool_or_panic(&self) -> bool {
+        if let Self::Bool(b) = self {
+            return *b;
         }
-    }
 
-    pub fn evaluate_eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Number(a), Self::Number(b)) => a == b,
-            (Self::String(a), Self::String(b)) => a == b,
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::DateTime(a), Self::DateTime(b)) => a == b,
-            (Self::Date(a), Self::Date(b)) => a == b,
-
-            (Self::Record(a), Self::Record(b)) => {
-                if a.len() != b.len() {
-                    return false;
-                }
-
-                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
-                    if k_a != k_b || v_a.evaluate_eq(v_b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            (Self::Array(a), Self::Array(b)) => {
-                for (a, b) in a.iter().zip(b.iter()) {
-                    if !a.evaluate_eq(b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            _ => false,
-        }
-    }
-
-    /// it could have used `evaluate_eq` but the fact that `evaluate_eq` returns false
-    /// on typemismatch would make this behavior confusing. To be noted, query are typecheckec
-    /// so typemistch **shouldn't** happen. However, it's possible that we didn't have enough type info
-    /// at parsing time.
-    pub fn evaluate_neq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Number(a), Self::Number(b)) => a != b,
-            (Self::String(a), Self::String(b)) => a != b,
-            (Self::Bool(a), Self::Bool(b)) => a != b,
-            (Self::DateTime(a), Self::DateTime(b)) => a != b,
-            (Self::Date(a), Self::Date(b)) => a != b,
-
-            (Self::Record(a), Self::Record(b)) => {
-                if a.len() == b.len() {
-                    return false;
-                }
-
-                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
-                    if k_a == k_b || !v_a.evaluate_neq(v_b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            (Self::Array(a), Self::Array(b)) => {
-                for (a, b) in a.iter().zip(b.iter()) {
-                    if !a.evaluate_neq(b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            _ => false,
-        }
-    }
-
-    pub fn evaluate_lt(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Number(a), Self::Number(b)) => a <= b,
-            (Self::String(a), Self::String(b)) => a <= b,
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::DateTime(a), Self::DateTime(b)) => a == b,
-            (Self::Date(a), Self::Date(b)) => a == b,
-
-            (Self::Record(a), Self::Record(b)) => {
-                if a.len() != b.len() {
-                    return false;
-                }
-
-                for ((k_a, v_a), (k_b, v_b)) in a.iter().zip(b.iter()) {
-                    if k_a != k_b || v_a.evaluate_eq(v_b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            (Self::Array(a), Self::Array(b)) => {
-                for (a, b) in a.iter().zip(b.iter()) {
-                    if !a.evaluate_eq(b) {
-                        return false;
-                    }
-                }
-
-                true
-            }
-
-            _ => false,
-        }
+        panic!("expected a boolean but got something else")
     }
 }
 
@@ -799,23 +643,138 @@ fn evaluate_binary_operation<'a>(
     a: &QueryValue<'a>,
     b: &QueryValue<'a>,
 ) -> QueryValue<'a> {
-    match (op, a, b) {
-        (Operator::Add, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a + b),
-        (Operator::Sub, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a - b),
-        (Operator::Mul, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a * b),
-        (Operator::Div, QueryValue::Number(a), QueryValue::Number(b)) => QueryValue::Number(a / b),
-        (Operator::Eq, a, b) => QueryValue::Bool(a.evaluate_eq(b)),
-        (Operator::Neq, a, b) => QueryValue::Bool(a.evaluate_neq(b)),
-        Operator::Lt => todo!(),
-        Operator::Lte => todo!(),
-        Operator::Gt => todo!(),
-        Operator::Gte => todo!(),
-        Operator::And => todo!(),
-        Operator::Or => todo!(),
-        Operator::Xor => todo!(),
-        Operator::Not => todo!(),
-        Operator::Contains => todo!(),
-        Operator::As => todo!(),
+    match (a, b) {
+        (QueryValue::Null, QueryValue::Null) => QueryValue::Null,
+
+        (QueryValue::String(a), QueryValue::String(b)) => match op {
+            Operator::Eq => QueryValue::Bool(a == b),
+            Operator::Neq => QueryValue::Bool(a != b),
+            Operator::Lt => QueryValue::Bool(a < b),
+            Operator::Lte => QueryValue::Bool(a <= b),
+            Operator::Gt => QueryValue::Bool(a > b),
+            Operator::Gte => QueryValue::Bool(a >= b),
+            _ => panic!("runtime error"),
+        },
+
+        (QueryValue::Number(a), QueryValue::Number(b)) => match op {
+            Operator::Add => QueryValue::Number(a + b),
+            Operator::Sub => QueryValue::Number(a - b),
+            Operator::Mul => QueryValue::Number(a * b),
+            Operator::Div => QueryValue::Number(a / b),
+            Operator::Eq => QueryValue::Bool(
+                a.partial_cmp(b)
+                    .map(|o| matches!(o, Ordering::Equal))
+                    .unwrap_or_default(),
+            ),
+            Operator::Neq => QueryValue::Bool(
+                a.partial_cmp(b)
+                    .map(|o| !matches!(o, Ordering::Equal))
+                    .unwrap_or_default(),
+            ),
+            Operator::Lt => QueryValue::Bool(a < b),
+            Operator::Lte => QueryValue::Bool(a <= b),
+            Operator::Gt => QueryValue::Bool(a > b),
+            Operator::Gte => QueryValue::Bool(a >= b),
+            _ => panic!("runtime error"),
+        },
+
+        (QueryValue::Bool(a), QueryValue::Bool(b)) => match op {
+            Operator::Eq => QueryValue::Bool(a == b),
+            Operator::Neq => QueryValue::Bool(a != b),
+            Operator::Lt => QueryValue::Bool(a < b),
+            Operator::Lte => QueryValue::Bool(a <= b),
+            Operator::Gt => QueryValue::Bool(a > b),
+            Operator::Gte => QueryValue::Bool(a >= b),
+            Operator::And => QueryValue::Bool(*a && *b),
+            Operator::Or => QueryValue::Bool(*a || *b),
+            Operator::Xor => QueryValue::Bool(*a ^ *b),
+            _ => panic!("runtime error"),
+        },
+
+        (this @ QueryValue::Record(a), that @ QueryValue::Record(b)) => match op {
+            Operator::Eq => {
+                if a.len() != b.len() {
+                    return QueryValue::Bool(false);
+                }
+
+                for ((a_k, a_v), (b_k, b_v)) in a.iter().zip(b.iter()) {
+                    if a_k != b_k
+                        || evaluate_binary_operation(Operator::Eq, a_v, b_v).as_bool_or_panic()
+                    {
+                        return QueryValue::Bool(false);
+                    }
+                }
+
+                QueryValue::Bool(true)
+            }
+
+            Operator::Neq => QueryValue::Bool(
+                !evaluate_binary_operation(Operator::Eq, this, that).as_bool_or_panic(),
+            ),
+
+            _ => panic!("runtime error"),
+        },
+
+        (this @ QueryValue::Array(a), that @ QueryValue::Array(b)) => match op {
+            Operator::Eq => {
+                if a.len() != b.len() {
+                    return QueryValue::Bool(false);
+                }
+
+                for (a, b) in a.iter().zip(b.iter()) {
+                    if !evaluate_binary_operation(Operator::Eq, a, b).as_bool_or_panic() {
+                        return QueryValue::Bool(false);
+                    }
+                }
+
+                QueryValue::Bool(true)
+            }
+
+            Operator::Neq => QueryValue::Bool(
+                !evaluate_binary_operation(Operator::Eq, this, that).as_bool_or_panic(),
+            ),
+
+            _ => panic!("runtime error"),
+        },
+
+        (QueryValue::DateTime(a), QueryValue::DateTime(b)) => match op {
+            Operator::Eq => QueryValue::Bool(a == b),
+            Operator::Neq => QueryValue::Bool(a != b),
+            Operator::Lt => QueryValue::Bool(a < b),
+            Operator::Lte => QueryValue::Bool(a <= b),
+            Operator::Gt => QueryValue::Bool(a > b),
+            Operator::Gte => QueryValue::Bool(a >= b),
+            _ => panic!("runtime error"),
+        },
+
+        (QueryValue::Date(a), QueryValue::Date(b)) => match op {
+            Operator::Eq => QueryValue::Bool(a == b),
+            Operator::Neq => QueryValue::Bool(a != b),
+            Operator::Lt => QueryValue::Bool(a < b),
+            Operator::Lte => QueryValue::Bool(a <= b),
+            Operator::Gt => QueryValue::Bool(a > b),
+            Operator::Gte => QueryValue::Bool(a >= b),
+            _ => panic!("runtime error"),
+        },
+
+        (QueryValue::Time(a), QueryValue::Time(b)) => match op {
+            Operator::Eq => QueryValue::Bool(a == b),
+            Operator::Neq => QueryValue::Bool(a != b),
+            Operator::Lt => QueryValue::Bool(a < b),
+            Operator::Lte => QueryValue::Bool(a <= b),
+            Operator::Gt => QueryValue::Bool(a > b),
+            Operator::Gte => QueryValue::Bool(a >= b),
+            _ => panic!("runtime error"),
+        },
+
+        (QueryValue::Array(values), value) if matches!(op, Operator::Contains) => QueryValue::Bool(
+            values
+                .iter()
+                .find(|a| evaluate_binary_operation(Operator::Eq, a, value).as_bool_or_panic())
+                .is_some(),
+        ),
+
+        _ => panic!("runtime error"),
     }
 }
 
