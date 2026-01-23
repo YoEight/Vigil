@@ -439,6 +439,7 @@ impl QueryValue<'_> {
 }
 
 fn evaluate_value<'a>(
+    options: &AnalysisOptions,
     env: &HashMap<&'a str, QueryValue<'a>>,
     value: &'a eventql_parser::Value,
 ) -> QueryValue<'a> {
@@ -451,7 +452,7 @@ fn evaluate_value<'a>(
             let mut arr = Vec::with_capacity(exprs.capacity());
 
             for expr in exprs {
-                arr.push(evaluate_value(env, &expr.value));
+                arr.push(evaluate_value(options, env, &expr.value));
             }
 
             QueryValue::Array(Cow::Owned(arr))
@@ -461,28 +462,33 @@ fn evaluate_value<'a>(
             let mut record = BTreeMap::new();
 
             for field in fields {
-                record.insert(field.name.as_str(), evaluate_value(env, &field.value.value));
+                record.insert(
+                    field.name.as_str(),
+                    evaluate_value(options, env, &field.value.value),
+                );
             }
 
             QueryValue::Record(Cow::Owned(record))
         }
 
-        eventql_parser::Value::Access(access) => match evaluate_value(env, &access.target.value) {
-            QueryValue::Record(rec) => rec
-                .get(access.field.as_str())
-                .cloned()
-                .unwrap_or(QueryValue::Null),
+        eventql_parser::Value::Access(access) => {
+            match evaluate_value(options, env, &access.target.value) {
+                QueryValue::Record(rec) => rec
+                    .get(access.field.as_str())
+                    .cloned()
+                    .unwrap_or(QueryValue::Null),
 
-            _ => unreachable!(
-                "the query was statically analyzed, rendering that situation impossible"
-            ),
-        },
+                _ => unreachable!(
+                    "the query was statically analyzed, rendering that situation impossible"
+                ),
+            }
+        }
 
         eventql_parser::Value::App(app) => {
             let mut args = Vec::with_capacity(app.args.capacity());
 
             for arg in &app.args {
-                args.push(evaluate_value(env, &arg.value));
+                args.push(evaluate_value(options, env, &arg.value));
             }
 
             // -------------
@@ -718,15 +724,18 @@ fn evaluate_value<'a>(
         }
 
         eventql_parser::Value::Binary(binary) => {
-            let lhs = evaluate_value(env, &binary.lhs.value);
+            let lhs = evaluate_value(options, env, &binary.lhs.value);
 
             if let Operator::As = binary.operator
                 && let eventql_parser::Value::Id(tpe) = &binary.rhs.value
             {
-                return type_conversion(&lhs, todo!());
+                let tpe = eventql_parser::prelude::name_to_type(options, tpe)
+                    .expect("to be defined because it has passed static analysis");
+
+                return type_conversion(&lhs, tpe);
             }
 
-            let rhs = evaluate_value(env, &binary.rhs.value);
+            let rhs = evaluate_value(options, env, &binary.rhs.value);
 
             evaluate_binary_operation(binary.operator, &lhs, &rhs)
         }
@@ -736,8 +745,53 @@ fn evaluate_value<'a>(
     }
 }
 
+/// Many runtime error and most can be caught during static analysis.
 fn type_conversion<'a>(value: &QueryValue<'a>, tpe: eventql_parser::Type) -> QueryValue<'a> {
-    todo!()
+    match value {
+        QueryValue::Null => QueryValue::Null,
+
+        QueryValue::String(cow) => match tpe {
+            eventql_parser::Type::String | eventql_parser::Type::Subject => {
+                QueryValue::String(cow.clone())
+            }
+            _ => panic!("runtime error"),
+        },
+
+        QueryValue::Number(n) => match tpe {
+            eventql_parser::Type::Number => QueryValue::Number(*n),
+            eventql_parser::Type::String => QueryValue::String(n.to_string().into()),
+            _ => panic!("runtime error"),
+        },
+
+        QueryValue::Bool(b) => match tpe {
+            eventql_parser::Type::String => QueryValue::String(b.to_string().into()),
+            eventql_parser::Type::Bool => QueryValue::Bool(*b),
+            _ => panic!("runtime error"),
+        },
+
+        QueryValue::Record(_) => panic!("runtime error"),
+        QueryValue::Array(_) => panic!("runtime error"),
+
+        QueryValue::DateTime(date_time) => match tpe {
+            eventql_parser::Type::String => QueryValue::String(date_time.to_string().into()),
+            eventql_parser::Type::Date => QueryValue::Date(date_time.date_naive()),
+            eventql_parser::Type::Time => QueryValue::Time(date_time.time()),
+            eventql_parser::Type::DateTime => QueryValue::DateTime(*date_time),
+            _ => panic!("runtime error"),
+        },
+
+        QueryValue::Date(naive_date) => match tpe {
+            eventql_parser::Type::String => QueryValue::String(naive_date.to_string().into()),
+            eventql_parser::Type::Date => QueryValue::Date(*naive_date),
+            _ => panic!("runtime error"),
+        },
+
+        QueryValue::Time(naive_time) => match tpe {
+            eventql_parser::Type::String => QueryValue::String(naive_time.to_string().into()),
+            eventql_parser::Type::Time => QueryValue::Time(*naive_time),
+            _ => panic!("runtime error"),
+        },
+    }
 }
 
 fn evaluate_binary_operation<'a>(
