@@ -584,8 +584,35 @@ fn evaluate_value<'a>(
             evaluate_binary_operation(binary.operator, &lhs, &rhs)
         }
 
-        eventql_parser::Value::Unary(unary) => todo!(),
-        eventql_parser::Value::Group(expr) => todo!(),
+        eventql_parser::Value::Unary(unary) => match unary.operator {
+            Operator::Add => {
+                if let QueryValue::Number(n) = evaluate_value(options, env, &unary.expr.value) {
+                    QueryValue::Number(n)
+                } else {
+                    panic!("runtime error")
+                }
+            }
+
+            Operator::Sub => {
+                if let QueryValue::Number(n) = evaluate_value(options, env, &unary.expr.value) {
+                    QueryValue::Number(-n)
+                } else {
+                    panic!("runtime error")
+                }
+            }
+
+            Operator::Not => {
+                if let QueryValue::Bool(b) = evaluate_value(options, env, &unary.expr.value) {
+                    QueryValue::Bool(!b)
+                } else {
+                    panic!("runtime error")
+                }
+            }
+
+            _ => panic!("runtime error"),
+        },
+
+        eventql_parser::Value::Group(expr) => evaluate_value(options, env, &expr.value),
     }
 }
 
