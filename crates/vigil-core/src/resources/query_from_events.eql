@@ -1,0 +1,3 @@
+FROM e IN events
+WHERE e.type == "user-deleted"
+PROJECT INTO { id: e.id }
