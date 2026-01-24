@@ -1,14 +1,14 @@
 use std::{
     borrow::Cow,
     cmp::Ordering,
-    collections::{BTreeMap, HashMap, VecDeque, hash_map},
-    f64, iter, slice,
+    collections::{BTreeMap, HashMap, VecDeque},
+    f64, iter,
     str::Split,
 };
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
-    Query, Type, parse_query,
+    Query, Type,
     prelude::{AnalysisOptions, Operator, Typed},
 };
 use rand::Rng;
@@ -311,36 +311,32 @@ impl Db {
         IndexedEvents::new(subject_events, self.events.as_slice())
     }
 
-    pub fn query(&self, query: &str) -> Result<Vec<serde_json::Value>> {
-        let events = vec![];
-        let query = parse_query(query)?.run_static_analysis(&AnalysisOptions::default())?;
-
-        let info = query.meta;
-
-        Ok(events)
+    pub fn run_query<'a>(
+        &'a self,
+        options: &'a AnalysisOptions,
+        query: &'a Query<Typed>,
+    ) -> Row<'a> {
+        catalog(self, options, query)
     }
 }
 
 type Row<'a> = Box<dyn Iterator<Item = QueryValue<'a>> + 'a>;
-
-#[derive(Default)]
-struct Source<'a> {
-    bindings: HashMap<&'a str, Row<'a>>,
-}
 
 type Sources<'a> = HashMap<&'a str, Row<'a>>;
 
 pub struct EventQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
+    options: &'a AnalysisOptions,
     buffer: HashMap<&'a str, QueryValue<'a>>,
 }
 
 impl<'a> EventQuery<'a> {
-    pub fn new(srcs: Sources<'a>, query: &'a Query<Typed>) -> Self {
+    pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
         Self {
             srcs,
             query,
+            options,
             buffer: Default::default(),
         }
     }
@@ -350,31 +346,29 @@ impl<'a> Iterator for EventQuery<'a> {
     type Item = QueryValue<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.buffer.clear();
+        loop {
+            self.buffer.clear();
 
-        for (binding, row) in self.srcs.iter_mut() {
-            self.buffer.insert(binding, row.next()?);
-        }
+            for (binding, row) in self.srcs.iter_mut() {
+                self.buffer.insert(binding, row.next()?);
+            }
 
-        todo!()
-    }
-}
+            if let Some(predicate) = &self.query.predicate
+                && !evaluate_predicate(&self.options, &self.buffer, &predicate.value)
+            {
+                continue;
+            }
 
-struct Node<'a> {
-    value: &'a eventql_parser::Value,
-    visited: bool,
-}
-
-impl<'a> Node<'a> {
-    fn new(value: &'a eventql_parser::Value) -> Self {
-        Self {
-            value,
-            visited: false,
+            return Some(evaluate_value(
+                &self.options,
+                &self.buffer,
+                &self.query.projection.value,
+            ));
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub enum QueryValue<'a> {
     Null,
     String(Cow<'a, str>),
@@ -928,7 +922,7 @@ fn evaluate_predicate<'a>(
     evaluate_value(options, env, value).as_bool_or_panic()
 }
 
-fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
+fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Row<'a> {
     let mut srcs = Sources::new();
     for query_src in &query.sources {
         match &query_src.kind {
@@ -961,12 +955,12 @@ fn catalog<'a>(db: &'a Db, scope: usize, query: &'a Query<Typed>) -> Row<'a> {
             }
 
             eventql_parser::SourceKind::Subquery(sub_query) => {
-                let row = catalog(db, scope + 1, sub_query);
+                let row = catalog(db, options, sub_query);
 
                 srcs.insert(&query_src.binding.name, row);
             }
         }
     }
 
-    Box::new(EventQuery::new(srcs, query))
+    Box::new(EventQuery::new(srcs, options, query))
 }
