@@ -57,10 +57,100 @@ impl Event {
                                 QueryValue::String(self.spec_version.as_str().into()),
                             );
                         }
+
                         _ => {
                             props.insert(name.as_str(), QueryValue::Null);
                         }
                     },
+
+                    "id" => match value {
+                        Type::String => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.id.to_string().into()),
+                            );
+                        }
+
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+
+                    "source" => match value {
+                        Type::String => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.source.as_str().into()),
+                            );
+                        }
+
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+
+                    "subject" => match value {
+                        Type::String | Type::Subject => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.subject.as_str().into()),
+                            );
+                        }
+
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+
+                    "type" => match value {
+                        Type::String => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.event_type.as_str().into()),
+                            );
+                        }
+
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+
+                    "datacontenttype" => match value {
+                        Type::String => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.datacontenttype.as_str().into()),
+                            );
+                        }
+
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+
+                    "data" => match value {
+                        Type::String => {
+                            props.insert(
+                                name.as_str(),
+                                QueryValue::String(self.data.as_str().into()),
+                            );
+                        }
+
+                        Type::Record(_props) => match self.datacontenttype.as_str() {
+                            "application/json" => {
+                                todo!("use serde_json to get a record out of the data payload")
+                            }
+
+                            _ => {
+                                props.insert(name.as_str(), QueryValue::Null);
+                            }
+                        },
+
+                        _ => {
+                            props.insert(name.as_str(), QueryValue::Null);
+                        }
+                    },
+
                     _ => {
                         props.insert(name.as_str(), QueryValue::Null);
                     }
