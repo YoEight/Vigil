@@ -1,0 +1,7 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(&options, &query).collect::<Vec<_>>()"
+---
+- Record:
+    id:
+      String: 77344193-67bb-44af-a854-77d5d56dbb3d
