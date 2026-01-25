@@ -1,5 +1,5 @@
 use eventql_parser::{parse_query, prelude::AnalysisOptions};
-use uuid::{Uuid, uuid};
+use uuid::uuid;
 
 use crate::db::{Db, Event};
 
