@@ -33,6 +33,14 @@ impl From<eventql_parser::prelude::Error> for Error {
 
 pub type Result<A> = std::result::Result<A, Error>;
 
+#[derive(Debug, Error, Serialize)]
+pub enum EvalError {
+    #[error("runtime error: {0}")]
+    Runtime(Cow<'static, str>),
+}
+
+pub type EvalResult<A> = std::result::Result<A, EvalError>;
+
 #[derive(Default, Serialize)]
 pub struct Event {
     pub spec_version: String,
@@ -320,7 +328,7 @@ impl Db {
     }
 }
 
-type Row<'a> = Box<dyn Iterator<Item = QueryValue<'a>> + 'a>;
+type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue<'a>>> + 'a>;
 
 type Sources<'a> = HashMap<&'a str, Row<'a>>;
 
@@ -343,20 +351,27 @@ impl<'a> EventQuery<'a> {
 }
 
 impl<'a> Iterator for EventQuery<'a> {
-    type Item = QueryValue<'a>;
+    type Item = EvalResult<QueryValue<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             self.buffer.clear();
 
             for (binding, row) in self.srcs.iter_mut() {
-                self.buffer.insert(binding, row.next()?);
+                match row.next()? {
+                    Ok(value) => {
+                        self.buffer.insert(binding, value);
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
             }
 
-            if let Some(predicate) = &self.query.predicate
-                && !evaluate_predicate(&self.options, &self.buffer, &predicate.value)
-            {
-                continue;
+            if let Some(predicate) = &self.query.predicate {
+                match evaluate_predicate(&self.options, &self.buffer, &predicate.value) {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(e) => return Some(Err(e)),
+                }
             }
 
             return Some(evaluate_value(
@@ -382,12 +397,14 @@ pub enum QueryValue<'a> {
 }
 
 impl QueryValue<'_> {
-    pub fn as_bool_or_panic(&self) -> bool {
+    pub fn as_bool(&self) -> EvalResult<bool> {
         if let Self::Bool(b) = self {
-            return *b;
+            return Ok(*b);
         }
 
-        panic!("expected a boolean but got something else")
+        Err(EvalError::Runtime(
+            "expected a boolean but got something else".into(),
+        ))
     }
 }
 
@@ -395,20 +412,23 @@ fn evaluate_value<'a>(
     options: &AnalysisOptions,
     env: &HashMap<&'a str, QueryValue<'a>>,
     value: &'a eventql_parser::Value,
-) -> QueryValue<'a> {
+) -> EvalResult<QueryValue<'a>> {
     match value {
-        eventql_parser::Value::Number(n) => QueryValue::Number(*n),
-        eventql_parser::Value::String(s) => QueryValue::String(Cow::Borrowed(s.as_str())),
-        eventql_parser::Value::Bool(b) => QueryValue::Bool(*b),
-        eventql_parser::Value::Id(id) => env.get(id.as_str()).cloned().expect("id to be defined"),
+        eventql_parser::Value::Number(n) => Ok(QueryValue::Number(*n)),
+        eventql_parser::Value::String(s) => Ok(QueryValue::String(Cow::Borrowed(s.as_str()))),
+        eventql_parser::Value::Bool(b) => Ok(QueryValue::Bool(*b)),
+        eventql_parser::Value::Id(id) => env
+            .get(id.as_str())
+            .cloned()
+            .ok_or_else(|| EvalError::Runtime(format!("undefined identifier: {}", id).into())),
         eventql_parser::Value::Array(exprs) => {
             let mut arr = Vec::with_capacity(exprs.capacity());
 
             for expr in exprs {
-                arr.push(evaluate_value(options, env, &expr.value));
+                arr.push(evaluate_value(options, env, &expr.value)?);
             }
 
-            QueryValue::Array(Cow::Owned(arr))
+            Ok(QueryValue::Array(Cow::Owned(arr)))
         }
 
         eventql_parser::Value::Record(fields) => {
@@ -417,23 +437,23 @@ fn evaluate_value<'a>(
             for field in fields {
                 record.insert(
                     field.name.as_str(),
-                    evaluate_value(options, env, &field.value.value),
+                    evaluate_value(options, env, &field.value.value)?,
                 );
             }
 
-            QueryValue::Record(Cow::Owned(record))
+            Ok(QueryValue::Record(Cow::Owned(record)))
         }
 
         eventql_parser::Value::Access(access) => {
-            match evaluate_value(options, env, &access.target.value) {
-                QueryValue::Record(rec) => rec
+            match evaluate_value(options, env, &access.target.value)? {
+                QueryValue::Record(rec) => Ok(rec
                     .get(access.field.as_str())
                     .cloned()
-                    .unwrap_or(QueryValue::Null),
+                    .unwrap_or(QueryValue::Null)),
 
-                _ => unreachable!(
-                    "the query was statically analyzed, rendering that situation impossible"
-                ),
+                _ => Err(EvalError::Runtime(
+                    "expected a record for field access".into(),
+                )),
             }
         }
 
@@ -441,7 +461,7 @@ fn evaluate_value<'a>(
             let mut args = Vec::with_capacity(app.args.capacity());
 
             for arg in &app.args {
-                args.push(evaluate_value(options, env, &arg.value));
+                args.push(evaluate_value(options, env, &arg.value)?);
             }
 
             // -------------
@@ -451,71 +471,71 @@ fn evaluate_value<'a>(
             if app.func.eq_ignore_ascii_case("abs")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.abs());
+                return Ok(QueryValue::Number(n.abs()));
             }
 
             if app.func.eq_ignore_ascii_case("ceil")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.ceil());
+                return Ok(QueryValue::Number(n.ceil()));
             }
 
             if app.func.eq_ignore_ascii_case("floor")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.floor());
+                return Ok(QueryValue::Number(n.floor()));
             }
 
             if app.func.eq_ignore_ascii_case("floor")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.round());
+                return Ok(QueryValue::Number(n.round()));
             }
 
             if app.func.eq_ignore_ascii_case("cos")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.cos());
+                return Ok(QueryValue::Number(n.cos()));
             }
 
             if app.func.eq_ignore_ascii_case("sin")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.sin());
+                return Ok(QueryValue::Number(n.sin()));
             }
 
             if app.func.eq_ignore_ascii_case("tan")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.tan());
+                return Ok(QueryValue::Number(n.tan()));
             }
 
             if app.func.eq_ignore_ascii_case("exp")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.exp());
+                return Ok(QueryValue::Number(n.exp()));
             }
 
             if app.func.eq_ignore_ascii_case("pow")
                 && let QueryValue::Number(x) = &args[0]
                 && let QueryValue::Number(y) = &args[1]
             {
-                return QueryValue::Number(x.powi(*y as i32));
+                return Ok(QueryValue::Number(x.powi(*y as i32)));
             }
 
             if app.func.eq_ignore_ascii_case("sqrt")
                 && let QueryValue::Number(n) = &args[0]
             {
-                return QueryValue::Number(n.sqrt());
+                return Ok(QueryValue::Number(n.sqrt()));
             }
 
             if app.func.eq_ignore_ascii_case("rand") {
                 let mut rng = rand::rng();
-                return QueryValue::Number(rng.random());
+                return Ok(QueryValue::Number(rng.random()));
             }
 
             if app.func.eq_ignore_ascii_case("pi") {
-                return QueryValue::Number(f64::consts::PI);
+                return Ok(QueryValue::Number(f64::consts::PI));
             }
 
             // ------------
@@ -525,46 +545,46 @@ fn evaluate_value<'a>(
             if app.func.eq_ignore_ascii_case("lower")
                 && let QueryValue::String(s) = &args[0]
             {
-                return QueryValue::String(s.to_lowercase().into());
+                return Ok(QueryValue::String(s.to_lowercase().into()));
             }
 
             if app.func.eq_ignore_ascii_case("upper")
                 && let QueryValue::String(s) = &args[0]
             {
-                return QueryValue::String(s.to_uppercase().into());
+                return Ok(QueryValue::String(s.to_uppercase().into()));
             }
 
             if app.func.eq_ignore_ascii_case("trim")
                 && let QueryValue::String(s) = &args[0]
             {
-                return QueryValue::String(s.trim().to_owned().into());
+                return Ok(QueryValue::String(s.trim().to_owned().into()));
             }
 
             if app.func.eq_ignore_ascii_case("ltrim")
                 && let QueryValue::String(s) = &args[0]
             {
-                return QueryValue::String(s.trim_start().to_owned().into());
+                return Ok(QueryValue::String(s.trim_start().to_owned().into()));
             }
 
             if app.func.eq_ignore_ascii_case("rtrim")
                 && let QueryValue::String(s) = &args[0]
             {
-                return QueryValue::String(s.trim_end().to_owned().into());
+                return Ok(QueryValue::String(s.trim_end().to_owned().into()));
             }
 
             if app.func.eq_ignore_ascii_case("len")
                 && let QueryValue::String(s) = &args[0]
             {
-                return QueryValue::Number(s.len() as f64);
+                return Ok(QueryValue::Number(s.len() as f64));
             }
 
             if app.func.eq_ignore_ascii_case("instr")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return QueryValue::Number(
-                    x.find(y.as_ref()).map(|i| i + 1).unwrap_or_default() as f64
-                );
+                return Ok(QueryValue::Number(
+                    x.find(y.as_ref()).map(|i| i + 1).unwrap_or_default() as f64,
+                ));
             }
 
             if app.func.eq_ignore_ascii_case("substring")
@@ -575,7 +595,9 @@ fn evaluate_value<'a>(
                 let start = *start as usize;
                 let length = *length as usize;
 
-                return QueryValue::String(s.chars().skip(start).take(length).collect());
+                return Ok(QueryValue::String(
+                    s.chars().skip(start).take(length).collect(),
+                ));
             }
 
             if app.func.eq_ignore_ascii_case("replace")
@@ -583,21 +605,21 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
                 && let QueryValue::String(z) = &args[2]
             {
-                return QueryValue::String(x.replace(y.as_ref(), z.as_ref()).into());
+                return Ok(QueryValue::String(x.replace(y.as_ref(), z.as_ref()).into()));
             }
 
             if app.func.eq_ignore_ascii_case("startswith")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return QueryValue::Bool(x.starts_with(y.as_ref()));
+                return Ok(QueryValue::Bool(x.starts_with(y.as_ref())));
             }
 
             if app.func.eq_ignore_ascii_case("endswith")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return QueryValue::Bool(x.ends_with(y.as_ref()));
+                return Ok(QueryValue::Bool(x.ends_with(y.as_ref())));
             }
 
             // -------------
@@ -605,58 +627,70 @@ fn evaluate_value<'a>(
             // -------------
 
             if app.func.eq_ignore_ascii_case("now") {
-                return QueryValue::DateTime(Utc::now());
+                return Ok(QueryValue::DateTime(Utc::now()));
             }
 
             if app.func.eq_ignore_ascii_case("year") {
                 return match &args[0] {
-                    QueryValue::DateTime(t) => QueryValue::Number(t.year() as f64),
-                    QueryValue::Date(d) => QueryValue::Number(d.year() as f64),
-                    _ => unreachable!(),
+                    QueryValue::DateTime(t) => Ok(QueryValue::Number(t.year() as f64)),
+                    QueryValue::Date(d) => Ok(QueryValue::Number(d.year() as f64)),
+                    _ => Err(EvalError::Runtime(
+                        "year() requires a DateTime or Date argument".into(),
+                    )),
                 };
             }
 
             if app.func.eq_ignore_ascii_case("month") {
                 return match &args[0] {
-                    QueryValue::DateTime(t) => QueryValue::Number(t.month() as f64),
-                    QueryValue::Date(d) => QueryValue::Number(d.month() as f64),
-                    _ => unreachable!(),
+                    QueryValue::DateTime(t) => Ok(QueryValue::Number(t.month() as f64)),
+                    QueryValue::Date(d) => Ok(QueryValue::Number(d.month() as f64)),
+                    _ => Err(EvalError::Runtime(
+                        "month() requires a DateTime or Date argument".into(),
+                    )),
                 };
             }
 
             if app.func.eq_ignore_ascii_case("day") {
                 return match &args[0] {
-                    QueryValue::DateTime(t) => QueryValue::Number(t.day() as f64),
-                    QueryValue::Date(d) => QueryValue::Number(d.day() as f64),
-                    _ => unreachable!(),
+                    QueryValue::DateTime(t) => Ok(QueryValue::Number(t.day() as f64)),
+                    QueryValue::Date(d) => Ok(QueryValue::Number(d.day() as f64)),
+                    _ => Err(EvalError::Runtime(
+                        "day() requires a DateTime or Date argument".into(),
+                    )),
                 };
             }
 
             if app.func.eq_ignore_ascii_case("hour") {
                 return match &args[0] {
-                    QueryValue::DateTime(t) => QueryValue::Number(t.hour() as f64),
-                    QueryValue::Time(t) => QueryValue::Number(t.hour() as f64),
-                    _ => unreachable!(),
+                    QueryValue::DateTime(t) => Ok(QueryValue::Number(t.hour() as f64)),
+                    QueryValue::Time(t) => Ok(QueryValue::Number(t.hour() as f64)),
+                    _ => Err(EvalError::Runtime(
+                        "hour() requires a DateTime or Time argument".into(),
+                    )),
                 };
             }
 
             if app.func.eq_ignore_ascii_case("minute") {
                 return match &args[0] {
-                    QueryValue::DateTime(t) => QueryValue::Number(t.minute() as f64),
-                    QueryValue::Time(t) => QueryValue::Number(t.minute() as f64),
-                    _ => unreachable!(),
+                    QueryValue::DateTime(t) => Ok(QueryValue::Number(t.minute() as f64)),
+                    QueryValue::Time(t) => Ok(QueryValue::Number(t.minute() as f64)),
+                    _ => Err(EvalError::Runtime(
+                        "minute() requires a DateTime or Time argument".into(),
+                    )),
                 };
             }
 
             if app.func.eq_ignore_ascii_case("weekday") {
                 return match &args[0] {
                     QueryValue::DateTime(t) => {
-                        QueryValue::Number(t.weekday().num_days_from_sunday() as f64)
+                        Ok(QueryValue::Number(t.weekday().num_days_from_sunday() as f64))
                     }
                     QueryValue::Date(d) => {
-                        QueryValue::Number(d.weekday().num_days_from_sunday() as f64)
+                        Ok(QueryValue::Number(d.weekday().num_days_from_sunday() as f64))
                     }
-                    _ => unreachable!(),
+                    _ => Err(EvalError::Runtime(
+                        "weekday() requires a DateTime or Date argument".into(),
+                    )),
                 };
             }
 
@@ -668,57 +702,65 @@ fn evaluate_value<'a>(
                 && let QueryValue::Bool(b) = args[0]
             {
                 // TODO - cloning is not necessary here as we could evaluate args lazily but that'll do for now
-                return if b { args[1].clone() } else { args[2].clone() };
+                return Ok(if b { args[1].clone() } else { args[2].clone() });
             }
 
-            unreachable!(
-                "the query was statically analyzed so all the functions used in the query are known to the query planner and have their arguments properly typed"
-            )
+            Err(EvalError::Runtime(
+                format!("unknown function or invalid arguments: {}", app.func).into(),
+            ))
         }
 
         eventql_parser::Value::Binary(binary) => {
-            let lhs = evaluate_value(options, env, &binary.lhs.value);
+            let lhs = evaluate_value(options, env, &binary.lhs.value)?;
 
             if let Operator::As = binary.operator
                 && let eventql_parser::Value::Id(tpe) = &binary.rhs.value
             {
                 let tpe = eventql_parser::prelude::name_to_type(options, tpe)
-                    .expect("to be defined because it has passed static analysis");
+                    .ok_or_else(|| EvalError::Runtime(format!("unknown type: {}", tpe).into()))?;
 
                 return type_conversion(&lhs, tpe);
             }
 
-            let rhs = evaluate_value(options, env, &binary.rhs.value);
+            let rhs = evaluate_value(options, env, &binary.rhs.value)?;
 
             evaluate_binary_operation(binary.operator, &lhs, &rhs)
         }
 
         eventql_parser::Value::Unary(unary) => match unary.operator {
             Operator::Add => {
-                if let QueryValue::Number(n) = evaluate_value(options, env, &unary.expr.value) {
-                    QueryValue::Number(n)
+                if let QueryValue::Number(n) = evaluate_value(options, env, &unary.expr.value)? {
+                    Ok(QueryValue::Number(n))
                 } else {
-                    panic!("runtime error")
+                    Err(EvalError::Runtime(
+                        "unary + operator requires a number".into(),
+                    ))
                 }
             }
 
             Operator::Sub => {
-                if let QueryValue::Number(n) = evaluate_value(options, env, &unary.expr.value) {
-                    QueryValue::Number(-n)
+                if let QueryValue::Number(n) = evaluate_value(options, env, &unary.expr.value)? {
+                    Ok(QueryValue::Number(-n))
                 } else {
-                    panic!("runtime error")
+                    Err(EvalError::Runtime(
+                        "unary - operator requires a number".into(),
+                    ))
                 }
             }
 
             Operator::Not => {
-                if let QueryValue::Bool(b) = evaluate_value(options, env, &unary.expr.value) {
-                    QueryValue::Bool(!b)
+                if let QueryValue::Bool(b) = evaluate_value(options, env, &unary.expr.value)? {
+                    Ok(QueryValue::Bool(!b))
                 } else {
-                    panic!("runtime error")
+                    Err(EvalError::Runtime(
+                        "unary ! operator requires a boolean".into(),
+                    ))
                 }
             }
 
-            _ => panic!("runtime error"),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported unary operator: {:?}", unary.operator).into(),
+            )),
         },
 
         eventql_parser::Value::Group(expr) => evaluate_value(options, env, &expr.value),
@@ -726,50 +768,65 @@ fn evaluate_value<'a>(
 }
 
 /// Many runtime error and most can be caught during static analysis.
-fn type_conversion<'a>(value: &QueryValue<'a>, tpe: eventql_parser::Type) -> QueryValue<'a> {
+fn type_conversion<'a>(
+    value: &QueryValue<'a>,
+    tpe: eventql_parser::Type,
+) -> EvalResult<QueryValue<'a>> {
     match value {
-        QueryValue::Null => QueryValue::Null,
+        QueryValue::Null => Ok(QueryValue::Null),
 
         QueryValue::String(cow) => match tpe {
             eventql_parser::Type::String | eventql_parser::Type::Subject => {
-                QueryValue::String(cow.clone())
+                Ok(QueryValue::String(cow.clone()))
             }
-            _ => panic!("runtime error"),
+            _ => Err(EvalError::Runtime(
+                format!("cannot convert String to {tpe}").into(),
+            )),
         },
 
         QueryValue::Number(n) => match tpe {
-            eventql_parser::Type::Number => QueryValue::Number(*n),
-            eventql_parser::Type::String => QueryValue::String(n.to_string().into()),
-            _ => panic!("runtime error"),
+            eventql_parser::Type::Number => Ok(QueryValue::Number(*n)),
+            eventql_parser::Type::String => Ok(QueryValue::String(n.to_string().into())),
+            _ => Err(EvalError::Runtime(
+                format!("cannot convert Number to {tpe}").into(),
+            )),
         },
 
         QueryValue::Bool(b) => match tpe {
-            eventql_parser::Type::String => QueryValue::String(b.to_string().into()),
-            eventql_parser::Type::Bool => QueryValue::Bool(*b),
-            _ => panic!("runtime error"),
+            eventql_parser::Type::String => Ok(QueryValue::String(b.to_string().into())),
+            eventql_parser::Type::Bool => Ok(QueryValue::Bool(*b)),
+            _ => Err(EvalError::Runtime(
+                format!("cannot convert Bool to {tpe}").into(),
+            )),
         },
 
-        QueryValue::Record(_) => panic!("runtime error"),
-        QueryValue::Array(_) => panic!("runtime error"),
+        QueryValue::Record(_) => Err(EvalError::Runtime("cannot convert Record".into())),
+        QueryValue::Array(_) => Err(EvalError::Runtime("cannot convert Array".into())),
 
         QueryValue::DateTime(date_time) => match tpe {
-            eventql_parser::Type::String => QueryValue::String(date_time.to_string().into()),
-            eventql_parser::Type::Date => QueryValue::Date(date_time.date_naive()),
-            eventql_parser::Type::Time => QueryValue::Time(date_time.time()),
-            eventql_parser::Type::DateTime => QueryValue::DateTime(*date_time),
-            _ => panic!("runtime error"),
+            eventql_parser::Type::String => Ok(QueryValue::String(date_time.to_string().into())),
+            eventql_parser::Type::Date => Ok(QueryValue::Date(date_time.date_naive())),
+            eventql_parser::Type::Time => Ok(QueryValue::Time(date_time.time())),
+            eventql_parser::Type::DateTime => Ok(QueryValue::DateTime(*date_time)),
+            _ => Err(EvalError::Runtime(
+                format!("cannot convert DateTime to {tpe}").into(),
+            )),
         },
 
         QueryValue::Date(naive_date) => match tpe {
-            eventql_parser::Type::String => QueryValue::String(naive_date.to_string().into()),
-            eventql_parser::Type::Date => QueryValue::Date(*naive_date),
-            _ => panic!("runtime error"),
+            eventql_parser::Type::String => Ok(QueryValue::String(naive_date.to_string().into())),
+            eventql_parser::Type::Date => Ok(QueryValue::Date(*naive_date)),
+            _ => Err(EvalError::Runtime(
+                format!("cannot convert Date to {tpe}").into(),
+            )),
         },
 
         QueryValue::Time(naive_time) => match tpe {
-            eventql_parser::Type::String => QueryValue::String(naive_time.to_string().into()),
-            eventql_parser::Type::Time => QueryValue::Time(*naive_time),
-            _ => panic!("runtime error"),
+            eventql_parser::Type::String => Ok(QueryValue::String(naive_time.to_string().into())),
+            eventql_parser::Type::Time => Ok(QueryValue::Time(*naive_time)),
+            _ => Err(EvalError::Runtime(
+                format!("cannot convert Time to {tpe}").into(),
+            )),
         },
     }
 }
@@ -778,139 +835,157 @@ fn evaluate_binary_operation<'a>(
     op: Operator,
     a: &QueryValue<'a>,
     b: &QueryValue<'a>,
-) -> QueryValue<'a> {
+) -> EvalResult<QueryValue<'a>> {
     match (a, b) {
-        (QueryValue::Null, QueryValue::Null) => QueryValue::Null,
+        (QueryValue::Null, QueryValue::Null) => Ok(QueryValue::Null),
 
         (QueryValue::String(a), QueryValue::String(b)) => match op {
-            Operator::Eq => QueryValue::Bool(a == b),
-            Operator::Neq => QueryValue::Bool(a != b),
-            Operator::Lt => QueryValue::Bool(a < b),
-            Operator::Lte => QueryValue::Bool(a <= b),
-            Operator::Gt => QueryValue::Bool(a > b),
-            Operator::Gte => QueryValue::Bool(a >= b),
-            _ => panic!("runtime error"),
+            Operator::Eq => Ok(QueryValue::Bool(a == b)),
+            Operator::Neq => Ok(QueryValue::Bool(a != b)),
+            Operator::Lt => Ok(QueryValue::Bool(a < b)),
+            Operator::Lte => Ok(QueryValue::Bool(a <= b)),
+            Operator::Gt => Ok(QueryValue::Bool(a > b)),
+            Operator::Gte => Ok(QueryValue::Bool(a >= b)),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for String").into(),
+            )),
         },
 
         (QueryValue::Number(a), QueryValue::Number(b)) => match op {
-            Operator::Add => QueryValue::Number(a + b),
-            Operator::Sub => QueryValue::Number(a - b),
-            Operator::Mul => QueryValue::Number(a * b),
-            Operator::Div => QueryValue::Number(a / b),
-            Operator::Eq => QueryValue::Bool(
+            Operator::Add => Ok(QueryValue::Number(a + b)),
+            Operator::Sub => Ok(QueryValue::Number(a - b)),
+            Operator::Mul => Ok(QueryValue::Number(a * b)),
+            Operator::Div => Ok(QueryValue::Number(a / b)),
+            Operator::Eq => Ok(QueryValue::Bool(
                 a.partial_cmp(b)
                     .map(|o| matches!(o, Ordering::Equal))
                     .unwrap_or_default(),
-            ),
-            Operator::Neq => QueryValue::Bool(
+            )),
+            Operator::Neq => Ok(QueryValue::Bool(
                 a.partial_cmp(b)
                     .map(|o| !matches!(o, Ordering::Equal))
                     .unwrap_or_default(),
-            ),
-            Operator::Lt => QueryValue::Bool(a < b),
-            Operator::Lte => QueryValue::Bool(a <= b),
-            Operator::Gt => QueryValue::Bool(a > b),
-            Operator::Gte => QueryValue::Bool(a >= b),
-            _ => panic!("runtime error"),
+            )),
+            Operator::Lt => Ok(QueryValue::Bool(a < b)),
+            Operator::Lte => Ok(QueryValue::Bool(a <= b)),
+            Operator::Gt => Ok(QueryValue::Bool(a > b)),
+            Operator::Gte => Ok(QueryValue::Bool(a >= b)),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for Number").into(),
+            )),
         },
 
         (QueryValue::Bool(a), QueryValue::Bool(b)) => match op {
-            Operator::Eq => QueryValue::Bool(a == b),
-            Operator::Neq => QueryValue::Bool(a != b),
-            Operator::Lt => QueryValue::Bool(a < b),
-            Operator::Lte => QueryValue::Bool(a <= b),
-            Operator::Gt => QueryValue::Bool(a > b),
-            Operator::Gte => QueryValue::Bool(a >= b),
-            Operator::And => QueryValue::Bool(*a && *b),
-            Operator::Or => QueryValue::Bool(*a || *b),
-            Operator::Xor => QueryValue::Bool(*a ^ *b),
-            _ => panic!("runtime error"),
+            Operator::Eq => Ok(QueryValue::Bool(a == b)),
+            Operator::Neq => Ok(QueryValue::Bool(a != b)),
+            Operator::Lt => Ok(QueryValue::Bool(a < b)),
+            Operator::Lte => Ok(QueryValue::Bool(a <= b)),
+            Operator::Gt => Ok(QueryValue::Bool(a > b)),
+            Operator::Gte => Ok(QueryValue::Bool(a >= b)),
+            Operator::And => Ok(QueryValue::Bool(*a && *b)),
+            Operator::Or => Ok(QueryValue::Bool(*a || *b)),
+            Operator::Xor => Ok(QueryValue::Bool(*a ^ *b)),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for Bool").into(),
+            )),
         },
 
         (this @ QueryValue::Record(a), that @ QueryValue::Record(b)) => match op {
             Operator::Eq => {
                 if a.len() != b.len() {
-                    return QueryValue::Bool(false);
+                    return Ok(QueryValue::Bool(false));
                 }
 
                 for ((a_k, a_v), (b_k, b_v)) in a.iter().zip(b.iter()) {
-                    if a_k != b_k
-                        || evaluate_binary_operation(Operator::Eq, a_v, b_v).as_bool_or_panic()
-                    {
-                        return QueryValue::Bool(false);
+                    if a_k != b_k || evaluate_binary_operation(Operator::Eq, a_v, b_v)?.as_bool()? {
+                        return Ok(QueryValue::Bool(false));
                     }
                 }
 
-                QueryValue::Bool(true)
+                Ok(QueryValue::Bool(true))
             }
 
-            Operator::Neq => QueryValue::Bool(
-                !evaluate_binary_operation(Operator::Eq, this, that).as_bool_or_panic(),
-            ),
+            Operator::Neq => Ok(QueryValue::Bool(
+                !evaluate_binary_operation(Operator::Eq, this, that)?.as_bool()?,
+            )),
 
-            _ => panic!("runtime error"),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for Record").into(),
+            )),
         },
 
         (this @ QueryValue::Array(a), that @ QueryValue::Array(b)) => match op {
             Operator::Eq => {
                 if a.len() != b.len() {
-                    return QueryValue::Bool(false);
+                    return Ok(QueryValue::Bool(false));
                 }
 
                 for (a, b) in a.iter().zip(b.iter()) {
-                    if !evaluate_binary_operation(Operator::Eq, a, b).as_bool_or_panic() {
-                        return QueryValue::Bool(false);
+                    if !evaluate_binary_operation(Operator::Eq, a, b)?.as_bool()? {
+                        return Ok(QueryValue::Bool(false));
                     }
                 }
 
-                QueryValue::Bool(true)
+                Ok(QueryValue::Bool(true))
             }
 
-            Operator::Neq => QueryValue::Bool(
-                !evaluate_binary_operation(Operator::Eq, this, that).as_bool_or_panic(),
-            ),
+            Operator::Neq => Ok(QueryValue::Bool(
+                !evaluate_binary_operation(Operator::Eq, this, that)?.as_bool()?,
+            )),
 
-            _ => panic!("runtime error"),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for Array").into(),
+            )),
         },
 
         (QueryValue::DateTime(a), QueryValue::DateTime(b)) => match op {
-            Operator::Eq => QueryValue::Bool(a == b),
-            Operator::Neq => QueryValue::Bool(a != b),
-            Operator::Lt => QueryValue::Bool(a < b),
-            Operator::Lte => QueryValue::Bool(a <= b),
-            Operator::Gt => QueryValue::Bool(a > b),
-            Operator::Gte => QueryValue::Bool(a >= b),
-            _ => panic!("runtime error"),
+            Operator::Eq => Ok(QueryValue::Bool(a == b)),
+            Operator::Neq => Ok(QueryValue::Bool(a != b)),
+            Operator::Lt => Ok(QueryValue::Bool(a < b)),
+            Operator::Lte => Ok(QueryValue::Bool(a <= b)),
+            Operator::Gt => Ok(QueryValue::Bool(a > b)),
+            Operator::Gte => Ok(QueryValue::Bool(a >= b)),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for DateTime").into(),
+            )),
         },
 
         (QueryValue::Date(a), QueryValue::Date(b)) => match op {
-            Operator::Eq => QueryValue::Bool(a == b),
-            Operator::Neq => QueryValue::Bool(a != b),
-            Operator::Lt => QueryValue::Bool(a < b),
-            Operator::Lte => QueryValue::Bool(a <= b),
-            Operator::Gt => QueryValue::Bool(a > b),
-            Operator::Gte => QueryValue::Bool(a >= b),
-            _ => panic!("runtime error"),
+            Operator::Eq => Ok(QueryValue::Bool(a == b)),
+            Operator::Neq => Ok(QueryValue::Bool(a != b)),
+            Operator::Lt => Ok(QueryValue::Bool(a < b)),
+            Operator::Lte => Ok(QueryValue::Bool(a <= b)),
+            Operator::Gt => Ok(QueryValue::Bool(a > b)),
+            Operator::Gte => Ok(QueryValue::Bool(a >= b)),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for Date").into(),
+            )),
         },
 
         (QueryValue::Time(a), QueryValue::Time(b)) => match op {
-            Operator::Eq => QueryValue::Bool(a == b),
-            Operator::Neq => QueryValue::Bool(a != b),
-            Operator::Lt => QueryValue::Bool(a < b),
-            Operator::Lte => QueryValue::Bool(a <= b),
-            Operator::Gt => QueryValue::Bool(a > b),
-            Operator::Gte => QueryValue::Bool(a >= b),
-            _ => panic!("runtime error"),
+            Operator::Eq => Ok(QueryValue::Bool(a == b)),
+            Operator::Neq => Ok(QueryValue::Bool(a != b)),
+            Operator::Lt => Ok(QueryValue::Bool(a < b)),
+            Operator::Lte => Ok(QueryValue::Bool(a <= b)),
+            Operator::Gt => Ok(QueryValue::Bool(a > b)),
+            Operator::Gte => Ok(QueryValue::Bool(a >= b)),
+            _ => Err(EvalError::Runtime(
+                format!("unsupported operator {op} for Time").into(),
+            )),
         },
 
-        (QueryValue::Array(values), value) if matches!(op, Operator::Contains) => QueryValue::Bool(
-            values
-                .iter()
-                .find(|a| evaluate_binary_operation(Operator::Eq, a, value).as_bool_or_panic())
-                .is_some(),
-        ),
+        (QueryValue::Array(values), value) if matches!(op, Operator::Contains) => {
+            for a in values.iter() {
+                if evaluate_binary_operation(Operator::Eq, a, value)?.as_bool()? {
+                    return Ok(QueryValue::Bool(true));
+                }
+            }
+            Ok(QueryValue::Bool(false))
+        }
 
-        _ => panic!("runtime error"),
+        _ => Err(EvalError::Runtime(
+            format!("unsupported binary operation {op} for given types").into(),
+        )),
     }
 }
 
@@ -918,8 +993,8 @@ fn evaluate_predicate<'a>(
     options: &AnalysisOptions,
     env: &HashMap<&'a str, QueryValue<'a>>,
     value: &'a eventql_parser::Value,
-) -> bool {
-    evaluate_value(options, env, value).as_bool_or_panic()
+) -> EvalResult<bool> {
+    evaluate_value(options, env, value)?.as_bool()
 }
 
 fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Row<'a> {
@@ -932,7 +1007,7 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
                 {
                     srcs.insert(
                         &query_src.binding.name,
-                        Box::new(db.events.iter().map(|e| e.project(tpe))),
+                        Box::new(db.events.iter().map(|e| Ok(e.project(tpe)))),
                     );
 
                     continue;
@@ -945,7 +1020,7 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
                 if let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name) {
                     srcs.insert(
                         &query_src.binding.name,
-                        Box::new(db.iter_subject(path).map(|e| e.project(tpe))),
+                        Box::new(db.iter_subject(path).map(|e| Ok(e.project(tpe)))),
                     );
 
                     continue;
