@@ -1003,7 +1003,11 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
         match &query_src.kind {
             eventql_parser::SourceKind::Name(name) => {
                 if name.eq_ignore_ascii_case("events")
-                    && let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name)
+                    && let Some(tpe) = query
+                        .meta
+                        .scope
+                        .entries
+                        .get(query_src.binding.name.as_str())
                 {
                     srcs.insert(
                         &query_src.binding.name,
@@ -1017,7 +1021,12 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
             }
 
             eventql_parser::SourceKind::Subject(path) => {
-                if let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name) {
+                if let Some(tpe) = query
+                    .meta
+                    .scope
+                    .entries
+                    .get(query_src.binding.name.as_str())
+                {
                     srcs.insert(
                         &query_src.binding.name,
                         Box::new(db.iter_subject(path).map(|e| Ok(e.project(tpe)))),
