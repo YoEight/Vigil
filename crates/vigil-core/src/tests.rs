@@ -59,3 +59,15 @@ fn test_run_query_from_events() {
 
     insta::assert_yaml_snapshot!(db.run_query(&options, &query).collect::<Vec<_>>());
 }
+
+#[test]
+fn test_run_query_department_grouping() {
+    // let mut db = Db::default();
+    let options = AnalysisOptions::default();
+
+    let query = parse_query(include_str!("./resources/department-grouping.eql"))
+        .unwrap()
+        .run_static_analysis(&options);
+
+    insta::assert_yaml_snapshot!(query);
+}
