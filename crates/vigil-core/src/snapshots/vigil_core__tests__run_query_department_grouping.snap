@@ -1,0 +1,134 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: query
+---
+Ok:
+  attrs:
+    pos:
+      line: 1
+      col: 1
+  sources:
+    - binding:
+        name: e
+        pos:
+          line: 1
+          col: 6
+      kind:
+        Name: events
+  predicate: ~
+  group_by:
+    expr:
+      attrs:
+        pos:
+          line: 2
+          col: 10
+      value:
+        Access:
+          target:
+            attrs:
+              pos:
+                line: 2
+                col: 10
+            value:
+              Access:
+                target:
+                  attrs:
+                    pos:
+                      line: 2
+                      col: 10
+                  value:
+                    Id: e
+                field: data
+          field: department
+    predicate: ~
+  order_by: ~
+  limit: ~
+  projection:
+    attrs:
+      pos:
+        line: 3
+        col: 14
+    value:
+      Record:
+        - name: department
+          value:
+            attrs:
+              pos:
+                line: 4
+                col: 14
+            value:
+              App:
+                func: UNIQUE
+                args:
+                  - attrs:
+                      pos:
+                        line: 4
+                        col: 21
+                    value:
+                      Access:
+                        target:
+                          attrs:
+                            pos:
+                              line: 4
+                              col: 21
+                          value:
+                            Access:
+                              target:
+                                attrs:
+                                  pos:
+                                    line: 4
+                                    col: 21
+                                value:
+                                  Id: e
+                              field: data
+                        field: department
+        - name: employeeCount
+          value:
+            attrs:
+              pos:
+                line: 5
+                col: 17
+            value:
+              App:
+                func: COUNT
+                args: []
+        - name: avgSalary
+          value:
+            attrs:
+              pos:
+                line: 6
+                col: 13
+            value:
+              App:
+                func: AVG
+                args:
+                  - attrs:
+                      pos:
+                        line: 6
+                        col: 17
+                    value:
+                      Access:
+                        target:
+                          attrs:
+                            pos:
+                              line: 6
+                              col: 17
+                          value:
+                            Access:
+                              target:
+                                attrs:
+                                  pos:
+                                    line: 6
+                                    col: 17
+                                value:
+                                  Id: e
+                              field: data
+                        field: salary
+  distinct: false
+  meta:
+    project:
+      Record:
+        avgSalary: Number
+        department: Unspecified
+        employeeCount: Number
+    aggregate: true
