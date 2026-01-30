@@ -474,7 +474,13 @@ impl QueryValue<'_> {
     ) -> QueryValue<'a> {
         match expectation {
             Type::Unspecified => Self::from(value, expectation),
-            Type::Number => todo!(),
+            Type::Number => {
+                if let serde_json::Value::Number(n) = value {
+                    QueryValue::Number(n.as_f64().expect("we don't use arbitrary precision"))
+                } else {
+                    QueryValue::Null
+                }
+            }
             Type::String | Type::Subject => {
                 if let serde_json::Value::String(s) = value {
                     QueryValue::String(s.into())
