@@ -3,7 +3,6 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, VecDeque},
     f64, iter,
-    marker::PhantomData,
     str::Split,
 };
 
@@ -418,25 +417,60 @@ impl<'a> Iterator for EventQuery<'a> {
     }
 }
 
-pub struct AggValue<'a> {
-    agg: Box<dyn Agg<'a>>,
+#[derive(Copy, Clone, Default)]
+struct Consts {
+    now: Option<DateTime<Utc>>,
 }
 
-pub trait Agg<'a> {
-    fn fold(&mut self, value: QueryValue<'a>);
-    fn complete(self) -> QueryValue<'a>;
+impl Consts {
+    fn now(&mut self) -> DateTime<Utc> {
+        if let Some(dt) = &self.now {
+            return *dt;
+        }
+
+        let now = Utc::now();
+        self.now = Some(now);
+        now
+    }
+}
+
+pub trait Agg {
+    fn fold(&mut self, params: &[QueryValue<'_>]);
+    fn complete(self) -> QueryValue<'static>;
 }
 
 #[derive(Default)]
-pub struct CountAgg<'a> {
-    value: u64,
-    _marker: PhantomData<&'a ()>,
+pub struct ConstAgg {
+    inner: Option<QueryValue<'static>>,
 }
 
-impl<'a> Agg<'a> for CountAgg<'a> {
-    fn fold(&mut self, value: QueryValue<'a>) {
-        if let QueryValue::Bool(b) = value {
-            if b {
+impl Agg for ConstAgg {
+    fn fold(&mut self, params: &[QueryValue<'_>]) {
+        if params.is_empty() {
+            return;
+        }
+
+        if self.inner.is_none() {
+            self.inner = Some(params[0].static_clone());
+        }
+    }
+
+    fn complete(self) -> QueryValue<'static> {
+        todo!()
+    }
+}
+
+#[derive(Default)]
+pub struct CountAgg {
+    value: u64,
+}
+
+impl Agg for CountAgg {
+    fn fold(&mut self, params: &[QueryValue]) {
+        if !params.is_empty() {
+            if let QueryValue::Bool(is_true) = params[0]
+                && is_true
+            {
                 self.value += 1;
             }
 
@@ -446,20 +480,52 @@ impl<'a> Agg<'a> for CountAgg<'a> {
         self.value += 1;
     }
 
-    fn complete(self) -> QueryValue<'a> {
+    fn complete(self) -> QueryValue<'static> {
         QueryValue::Number(self.value as f64)
     }
 }
 
-enum AggState<'a> {
-    Single(AggValue<'a>),
-    Record(BTreeMap<&'a str, AggValue<'a>>),
+enum AggState {
+    Single(Box<dyn Agg>),
+    Record(BTreeMap<String, Box<dyn Agg>>),
 }
 
-impl<'a> AggState<'a> {
-    fn from(query: &'a Query<Typed>) -> Self {
-        // match (&query.meta.project, &query.projection) {}
-        todo!()
+impl AggState {
+    fn from(options: &AnalysisOptions, query: &Query<Typed>) -> Self {
+        match &query.projection.value {
+            eventql_parser::Value::Record(fields) => {
+                let mut aggs = BTreeMap::<String, Box<dyn Agg>>::new();
+
+                for field in fields.iter() {
+                    if let eventql_parser::Value::App(app) = &field.value.value
+                        && let Type::App {
+                            aggregate: true, ..
+                        } = options
+                            .default_scope
+                            .entries
+                            .get(app.func.as_str())
+                            .expect("must be defined")
+                    {
+                        let agg = if app.func.eq_ignore_ascii_case("count") {
+                            Box::new(CountAgg::default())
+                        } else {
+                            unreachable!(
+                                "impossible as such function wouldn't pass the static analysis"
+                            )
+                        };
+
+                        aggs.insert(field.name.to_lowercase(), agg);
+                        continue;
+                    }
+
+                    aggs.insert(field.name.to_lowercase(), Box::new(ConstAgg::default()));
+                }
+
+                Self::Record(aggs)
+            }
+
+            _ => todo!(),
+        }
     }
 }
 
@@ -468,7 +534,7 @@ pub struct AggQuery<'a> {
     query: &'a Query<Typed>,
     options: &'a AnalysisOptions,
     buffer: HashMap<&'a str, QueryValue<'a>>,
-    state: AggState<'a>,
+    state: AggState,
 }
 
 impl<'a> AggQuery<'a> {
@@ -478,7 +544,7 @@ impl<'a> AggQuery<'a> {
             query,
             options,
             buffer: Default::default(),
-            state: AggState::from(query),
+            state: AggState::from(options, query),
         }
     }
 }
@@ -519,6 +585,31 @@ pub enum QueryValue<'a> {
 }
 
 impl QueryValue<'_> {
+    pub fn static_record<'a>(
+        props: &BTreeMap<Cow<'a, str>, QueryValue<'a>>,
+    ) -> QueryValue<'static> {
+        let mut rec = BTreeMap::new();
+
+        for (name, value) in props.iter() {
+            rec.insert(name.clone().into_owned().into(), value.static_clone());
+        }
+
+        QueryValue::Record(Cow::Owned(rec))
+    }
+
+    pub fn static_clone(&self) -> QueryValue<'static> {
+        match self {
+            Self::Null => QueryValue::Null,
+            Self::String(cow) => QueryValue::String(cow.clone().into_owned().into()),
+            Self::Number(n) => QueryValue::Number(*n),
+            Self::Bool(b) => QueryValue::Bool(*b),
+            Self::Record(cow) => QueryValue::static_record(cow.as_ref()),
+            Self::Array(cow) => todo!(),
+            Self::DateTime(date_time) => todo!(),
+            Self::Date(naive_date) => todo!(),
+            Self::Time(naive_time) => todo!(),
+        }
+    }
     pub fn as_bool(&self) -> EvalResult<bool> {
         if let Self::Bool(b) = self {
             return Ok(*b);
