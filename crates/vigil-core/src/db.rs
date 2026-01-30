@@ -3,6 +3,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, VecDeque},
     f64, iter,
+    marker::PhantomData,
     str::Split,
 };
 
@@ -413,6 +414,93 @@ impl<'a> Iterator for EventQuery<'a> {
                 &self.buffer,
                 &self.query.projection.value,
             ));
+        }
+    }
+}
+
+pub struct AggValue<'a> {
+    agg: Box<dyn Agg<'a>>,
+}
+
+pub trait Agg<'a> {
+    fn fold(&mut self, value: QueryValue<'a>);
+    fn complete(self) -> QueryValue<'a>;
+}
+
+#[derive(Default)]
+pub struct CountAgg<'a> {
+    value: u64,
+    _marker: PhantomData<&'a ()>,
+}
+
+impl<'a> Agg<'a> for CountAgg<'a> {
+    fn fold(&mut self, value: QueryValue<'a>) {
+        if let QueryValue::Bool(b) = value {
+            if b {
+                self.value += 1;
+            }
+
+            return;
+        }
+
+        self.value += 1;
+    }
+
+    fn complete(self) -> QueryValue<'a> {
+        QueryValue::Number(self.value as f64)
+    }
+}
+
+enum AggState<'a> {
+    Single(AggValue<'a>),
+    Record(BTreeMap<&'a str, AggValue<'a>>),
+}
+
+impl<'a> AggState<'a> {
+    fn from(query: &'a Query<Typed>) -> Self {
+        // match (&query.meta.project, &query.projection) {}
+        todo!()
+    }
+}
+
+pub struct AggQuery<'a> {
+    srcs: Sources<'a>,
+    query: &'a Query<Typed>,
+    options: &'a AnalysisOptions,
+    buffer: HashMap<&'a str, QueryValue<'a>>,
+    state: AggState<'a>,
+}
+
+impl<'a> AggQuery<'a> {
+    pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
+        Self {
+            srcs,
+            query,
+            options,
+            buffer: Default::default(),
+            state: AggState::from(query),
+        }
+    }
+}
+
+impl<'a> Iterator for AggQuery<'a> {
+    type Item = EvalResult<QueryValue<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.buffer.clear();
+
+            if let Err(e) = self.srcs.fill(&mut self.buffer)? {
+                return Some(Err(e));
+            }
+
+            if let Some(predicate) = &self.query.predicate {
+                match evaluate_predicate(&self.options, &self.buffer, &predicate.value) {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(e) => return Some(Err(e)),
+                }
+            }
         }
     }
 }
