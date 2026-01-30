@@ -49,118 +49,127 @@ pub struct Event {
     pub subject: String,
     pub event_type: String,
     pub datacontenttype: String,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 impl Event {
     fn project<'a>(&'a self, expected: &'a Type) -> QueryValue<'a> {
         if let eventql_parser::Type::Record(rec) = expected {
-            let mut props = BTreeMap::new();
+            let mut props = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
             for (name, value) in rec.iter() {
                 match name.as_str() {
                     "spec_version" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.as_str().into(),
                                 QueryValue::String(self.spec_version.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "id" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.as_str().into(),
                                 QueryValue::String(self.id.to_string().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "source" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.as_str().into(),
                                 QueryValue::String(self.source.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "subject" => match value {
                         Type::String | Type::Subject => {
                             props.insert(
-                                name.as_str(),
+                                name.as_str().into(),
                                 QueryValue::String(self.subject.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "type" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.as_str().into(),
                                 QueryValue::String(self.event_type.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "datacontenttype" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.as_str().into(),
                                 QueryValue::String(self.datacontenttype.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "data" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
-                                QueryValue::String(self.data.as_str().into()),
+                                name.as_str().into(),
+                                QueryValue::String(unsafe {
+                                    str::from_utf8_unchecked(self.data.as_slice()).into()
+                                }),
                             );
                         }
 
-                        Type::Record(_props) => match self.datacontenttype.as_str() {
+                        Type::Record(_) => match self.datacontenttype.as_str() {
                             "application/json" => {
-                                todo!("use serde_json to get a record out of the data payload")
+                                if let Ok(payload) = serde_json::from_slice(&self.data) {
+                                    props.insert(
+                                        name.as_str().into(),
+                                        QueryValue::build_from_type_expectation(payload, value),
+                                    );
+                                } else {
+                                    props.insert(name.as_str().into(), QueryValue::Null);
+                                }
                             }
 
                             _ => {
-                                props.insert(name.as_str(), QueryValue::Null);
+                                props.insert(name.as_str().into(), QueryValue::Null);
                             }
                         },
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     _ => {
-                        props.insert(name.as_str(), QueryValue::Null);
+                        props.insert(name.as_str().into(), QueryValue::Null);
                     }
                 }
             }
@@ -414,7 +423,7 @@ pub enum QueryValue<'a> {
     String(Cow<'a, str>),
     Number(f64),
     Bool(bool),
-    Record(Cow<'a, BTreeMap<&'a str, QueryValue<'a>>>),
+    Record(Cow<'a, BTreeMap<Cow<'a, str>, QueryValue<'a>>>),
     Array(Cow<'a, [QueryValue<'a>]>),
     DateTime(DateTime<Utc>),
     Date(NaiveDate),
@@ -430,6 +439,128 @@ impl QueryValue<'_> {
         Err(EvalError::Runtime(
             "expected a boolean but got something else".into(),
         ))
+    }
+
+    pub fn from<'a>(value: serde_json::Value, _tpe: &'a Type) -> QueryValue<'a> {
+        match value {
+            serde_json::Value::Null => QueryValue::Null,
+            serde_json::Value::Bool(b) => QueryValue::Bool(b),
+            serde_json::Value::Number(number) => {
+                QueryValue::Number(number.as_f64().expect("we don't use arbitrary precision"))
+            }
+            serde_json::Value::String(s) => QueryValue::String(s.into()),
+            serde_json::Value::Array(values) => {
+                let values = values
+                    .into_iter()
+                    .map(|v| Self::from(v, _tpe))
+                    .collect::<Vec<_>>();
+
+                QueryValue::Array(values.into())
+            }
+            serde_json::Value::Object(map) => {
+                let mut props = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
+                for (name, value) in map {
+                    props.insert(name.into(), Self::from(value, _tpe));
+                }
+
+                QueryValue::Record(Cow::Owned(props))
+            }
+        }
+    }
+
+    pub fn build_from_type_expectation<'a>(
+        value: serde_json::Value,
+        expectation: &'a Type,
+    ) -> QueryValue<'a> {
+        match expectation {
+            Type::Unspecified => Self::from(value, expectation),
+            Type::Number => todo!(),
+            Type::String | Type::Subject => {
+                if let serde_json::Value::String(s) = value {
+                    QueryValue::String(s.into())
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::Bool => {
+                if let serde_json::Value::Bool(b) = value {
+                    QueryValue::Bool(b)
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::Array(tpe) => {
+                if let serde_json::Value::Array(values) = value {
+                    let values = values
+                        .into_iter()
+                        .map(|v| Self::build_from_type_expectation(v, tpe.as_ref()))
+                        .collect();
+
+                    QueryValue::Array(Cow::Owned(values))
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::Record(map) => {
+                if let serde_json::Value::Object(mut values) = value {
+                    let mut props = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
+
+                    for (name, tpe) in map.iter() {
+                        let value = if let Some(value) = values.remove(name) {
+                            Self::build_from_type_expectation(value, tpe)
+                        } else {
+                            QueryValue::Null
+                        };
+
+                        props.insert(name.as_str().into(), value);
+                    }
+
+                    QueryValue::Record(Cow::Owned(props))
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            // this one is unlikely because the user cannot expect a function at that level
+            Type::App {
+                args: _x,
+                result: _y,
+                aggregate: _z,
+            } => todo!("use a proper result type so we can track it if it happens in real life"),
+
+            Type::Date => {
+                if let serde_json::Value::String(s) = value
+                    && let Ok(date) = s.parse::<NaiveDate>()
+                {
+                    QueryValue::Date(date)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            Type::Time => {
+                if let serde_json::Value::String(s) = value
+                    && let Ok(time) = s.parse::<NaiveTime>()
+                {
+                    QueryValue::Time(time)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            Type::DateTime => {
+                if let serde_json::Value::String(s) = value
+                    && let Ok(date_time) = s.parse::<DateTime<Utc>>()
+                {
+                    QueryValue::DateTime(date_time)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            // currenlty we don't custom type but will change
+            Type::Custom(_) => QueryValue::Null,
+        }
     }
 }
 
@@ -457,11 +588,11 @@ fn evaluate_value<'a>(
         }
 
         eventql_parser::Value::Record(fields) => {
-            let mut record = BTreeMap::new();
+            let mut record = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
 
             for field in fields {
                 record.insert(
-                    field.name.as_str(),
+                    field.name.as_str().into(),
                     evaluate_value(options, env, &field.value.value)?,
                 );
             }
