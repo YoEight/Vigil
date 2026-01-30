@@ -330,7 +330,36 @@ impl Db {
 
 type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue<'a>>> + 'a>;
 
-type Sources<'a> = HashMap<&'a str, Row<'a>>;
+#[derive(Default)]
+pub struct Sources<'a> {
+    inner: HashMap<&'a str, Row<'a>>,
+}
+
+type Buffer<'a> = HashMap<&'a str, QueryValue<'a>>;
+
+impl<'a> Sources<'a> {
+    fn iter_mut(&mut self) -> impl Iterator<Item = (&&'a str, &mut Row<'a>)> {
+        self.inner.iter_mut()
+    }
+
+    fn insert(&mut self, key: &'a str, row: Row<'a>) {
+        self.inner.insert(key, row);
+    }
+
+    fn fill(&mut self, buffer: &mut Buffer<'a>) -> Option<EvalResult<()>> {
+        for (binding, row) in self.iter_mut() {
+            match row.next()? {
+                Ok(value) => {
+                    buffer.insert(binding, value);
+                }
+
+                Err(e) => return Some(Err(e)),
+            }
+        }
+
+        Some(Ok(()))
+    }
+}
 
 pub struct EventQuery<'a> {
     srcs: Sources<'a>,
@@ -357,13 +386,9 @@ impl<'a> Iterator for EventQuery<'a> {
         loop {
             self.buffer.clear();
 
-            for (binding, row) in self.srcs.iter_mut() {
-                match row.next()? {
-                    Ok(value) => {
-                        self.buffer.insert(binding, value);
-                    }
-                    Err(e) => return Some(Err(e)),
-                }
+            let outcome = self.srcs.fill(&mut self.buffer)?;
+            if let Err(e) = outcome {
+                return Some(Err(e));
             }
 
             if let Some(predicate) = &self.query.predicate {
@@ -998,7 +1023,7 @@ fn evaluate_predicate<'a>(
 }
 
 fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Row<'a> {
-    let mut srcs = Sources::new();
+    let mut srcs = Sources::default();
     for query_src in &query.sources {
         match &query_src.kind {
             eventql_parser::SourceKind::Name(name) => {
