@@ -581,6 +581,8 @@ fn agg_inst_from_func(options: &AnalysisOptions, app: &App) -> Box<dyn Agg> {
             Box::new(CountAgg::default())
         } else if app.func.eq_ignore_ascii_case("avg") {
             Box::new(AvgAgg::default())
+        } else if app.func.eq_ignore_ascii_case("unique") {
+            Box::new(ConstAgg::default())
         } else {
             unreachable!("impossible as such function wouldn't pass the static analysis")
         };
@@ -900,7 +902,7 @@ fn evaluate_agg_value<'a>(
                 return Err(EvalError::Runtime("tagged aggregate not found".into()));
             }
 
-            todo!()
+            Ok(())
         }
 
         _ => Err(EvalError::Runtime(
