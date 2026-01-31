@@ -630,15 +630,15 @@ impl<'a> Iterator for AggQuery<'a> {
     type Item = EvalResult<QueryValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.completed {
-            if let Some(result) = self.results.pop() {
-                return Some(Ok(result));
+        loop {
+            if self.completed {
+                if let Some(result) = self.results.pop() {
+                    return Some(Ok(result));
+                }
+
+                return None;
             }
 
-            return None;
-        }
-
-        loop {
             self.buffer.clear();
 
             let outcome = if let Some(outcome) = self.srcs.fill(&mut self.buffer) {
