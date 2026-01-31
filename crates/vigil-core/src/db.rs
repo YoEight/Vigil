@@ -736,6 +736,15 @@ impl QueryValue {
         ))
     }
 
+    #[cfg(test)]
+    pub fn as_str_or_panic(&self) -> &str {
+        if let Self::String(s) = self {
+            return s.as_str();
+        }
+
+        panic!("expected a string but got something else")
+    }
+
     pub fn from(value: serde_json::Value, _tpe: &Type) -> QueryValue {
         match value {
             serde_json::Value::Null => QueryValue::Null,

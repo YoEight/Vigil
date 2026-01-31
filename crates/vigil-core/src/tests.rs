@@ -1,7 +1,7 @@
 use eventql_parser::{parse_query, prelude::AnalysisOptions};
 use uuid::uuid;
 
-use crate::db::{Db, Event};
+use crate::db::{Db, EvalResult, Event, QueryValue};
 
 #[test]
 fn test_append() {
@@ -143,5 +143,22 @@ fn test_run_query_department_grouping() {
         .run_static_analysis(&options)
         .unwrap();
 
-    insta::assert_yaml_snapshot!(db.run_query(&options, &query).collect::<Vec<_>>());
+    let mut result = db
+        .run_query(&options, &query)
+        .collect::<EvalResult<Vec<_>>>()
+        .unwrap();
+
+    result.sort_by_key(|v| {
+        if let QueryValue::Record(props) = v {
+            props
+                .get("department")
+                .unwrap()
+                .as_str_or_panic()
+                .to_string()
+        } else {
+            "const".to_string()
+        }
+    });
+
+    insta::assert_yaml_snapshot!(result);
 }
