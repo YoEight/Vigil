@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "master"
+
+  pull_request:
+    branches:
+      - "master"
+
+  schedule:
+    - cron: "0 3 * * 0" # Every sunday at 3am UTC.
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: baptiste0928/cargo-install@v3.3.0
+        with:
+          crate: cargo-nextest
+          locked: true
+
+      - name: Run tests
+        run: cargo nextest run --no-fail-fast --hide-progress-bar
+
+  linting:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Format
+        run: cargo fmt -- --check
