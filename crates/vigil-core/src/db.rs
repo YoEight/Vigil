@@ -1,14 +1,16 @@
+use core::f64;
 use std::{
     borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, VecDeque},
-    f64, iter,
+    iter,
     str::Split,
 };
 
+use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
-    Query, Type,
+    App, Query, Type,
     prelude::{AnalysisOptions, Operator, Typed},
 };
 use rand::Rng;
@@ -49,11 +51,11 @@ pub struct Event {
     pub subject: String,
     pub event_type: String,
     pub datacontenttype: String,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 impl Event {
-    fn project<'a>(&'a self, expected: &'a Type) -> QueryValue<'a> {
+    fn project<'a>(&self, expected: &'a Type) -> QueryValue {
         if let eventql_parser::Type::Record(rec) = expected {
             let mut props = BTreeMap::new();
             for (name, value) in rec.iter() {
@@ -61,111 +63,117 @@ impl Event {
                     "spec_version" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.clone(),
                                 QueryValue::String(self.spec_version.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "id" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.clone(),
                                 QueryValue::String(self.id.to_string().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "source" => match value {
                         Type::String => {
-                            props.insert(
-                                name.as_str(),
-                                QueryValue::String(self.source.as_str().into()),
-                            );
+                            props.insert(name.clone(), QueryValue::String(self.source.clone()));
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "subject" => match value {
                         Type::String | Type::Subject => {
                             props.insert(
-                                name.as_str(),
+                                name.clone(),
                                 QueryValue::String(self.subject.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "type" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.clone(),
                                 QueryValue::String(self.event_type.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "datacontenttype" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
+                                name.clone(),
                                 QueryValue::String(self.datacontenttype.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.as_str().into(), QueryValue::Null);
                         }
                     },
 
                     "data" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str(),
-                                QueryValue::String(self.data.as_str().into()),
+                                name.clone(),
+                                QueryValue::String(unsafe {
+                                    str::from_utf8_unchecked(self.data.as_slice()).into()
+                                }),
                             );
                         }
 
-                        Type::Record(_props) => match self.datacontenttype.as_str() {
+                        Type::Record(_) => match self.datacontenttype.as_str() {
                             "application/json" => {
-                                todo!("use serde_json to get a record out of the data payload")
+                                if let Ok(payload) = serde_json::from_slice(&self.data) {
+                                    props.insert(
+                                        name.clone(),
+                                        QueryValue::build_from_type_expectation(payload, value),
+                                    );
+                                } else {
+                                    props.insert(name.clone(), QueryValue::Null);
+                                }
                             }
 
                             _ => {
-                                props.insert(name.as_str(), QueryValue::Null);
+                                props.insert(name.clone(), QueryValue::Null);
                             }
                         },
 
                         _ => {
-                            props.insert(name.as_str(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     _ => {
-                        props.insert(name.as_str(), QueryValue::Null);
+                        props.insert(name.clone(), QueryValue::Null);
                     }
                 }
             }
 
-            QueryValue::Record(Cow::Owned(props))
+            QueryValue::Record(props)
         } else {
             QueryValue::Null
         }
@@ -328,15 +336,44 @@ impl Db {
     }
 }
 
-type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue<'a>>> + 'a>;
+type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue>> + 'a>;
 
-type Sources<'a> = HashMap<&'a str, Row<'a>>;
+#[derive(Default)]
+pub struct Sources<'a> {
+    inner: HashMap<&'a str, Row<'a>>,
+}
+
+type Buffer<'a> = HashMap<&'a str, QueryValue>;
+
+impl<'a> Sources<'a> {
+    fn iter_mut(&mut self) -> impl Iterator<Item = (&&'a str, &mut Row<'a>)> {
+        self.inner.iter_mut()
+    }
+
+    fn insert(&mut self, key: &'a str, row: Row<'a>) {
+        self.inner.insert(key, row);
+    }
+
+    fn fill(&mut self, buffer: &mut Buffer<'a>) -> Option<EvalResult<()>> {
+        for (binding, row) in self.iter_mut() {
+            match row.next()? {
+                Ok(value) => {
+                    buffer.insert(binding, value);
+                }
+
+                Err(e) => return Some(Err(e)),
+            }
+        }
+
+        Some(Ok(()))
+    }
+}
 
 pub struct EventQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
     options: &'a AnalysisOptions,
-    buffer: HashMap<&'a str, QueryValue<'a>>,
+    buffer: HashMap<&'a str, QueryValue>,
 }
 
 impl<'a> EventQuery<'a> {
@@ -351,19 +388,15 @@ impl<'a> EventQuery<'a> {
 }
 
 impl<'a> Iterator for EventQuery<'a> {
-    type Item = EvalResult<QueryValue<'a>>;
+    type Item = EvalResult<QueryValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             self.buffer.clear();
 
-            for (binding, row) in self.srcs.iter_mut() {
-                match row.next()? {
-                    Ok(value) => {
-                        self.buffer.insert(binding, value);
-                    }
-                    Err(e) => return Some(Err(e)),
-                }
+            let outcome = self.srcs.fill(&mut self.buffer)?;
+            if let Err(e) = outcome {
+                return Some(Err(e));
             }
 
             if let Some(predicate) = &self.query.predicate {
@@ -383,20 +416,318 @@ impl<'a> Iterator for EventQuery<'a> {
     }
 }
 
+#[derive(Copy, Clone, Default)]
+struct Consts {
+    now: Option<DateTime<Utc>>,
+}
+
+impl Consts {
+    fn now(&mut self) -> DateTime<Utc> {
+        if let Some(dt) = &self.now {
+            return *dt;
+        }
+
+        let now = Utc::now();
+        self.now = Some(now);
+        now
+    }
+}
+
+pub trait Agg {
+    fn fold(&mut self, params: &[QueryValue]);
+    fn complete(&self) -> QueryValue;
+}
+
+#[derive(Default)]
+pub struct ConstAgg {
+    inner: Option<QueryValue>,
+}
+
+impl Agg for ConstAgg {
+    fn fold(&mut self, params: &[QueryValue]) {
+        if params.is_empty() {
+            return;
+        }
+
+        if self.inner.is_none() {
+            self.inner = Some(params[0].clone());
+        }
+    }
+
+    fn complete(&self) -> QueryValue {
+        self.inner.clone().unwrap_or(QueryValue::Null)
+    }
+}
+
+#[derive(Default)]
+pub struct CountAgg {
+    value: u64,
+}
+
+impl Agg for CountAgg {
+    fn fold(&mut self, params: &[QueryValue]) {
+        if !params.is_empty() {
+            if let QueryValue::Bool(is_true) = params[0]
+                && is_true
+            {
+                self.value += 1;
+            }
+
+            return;
+        }
+
+        self.value += 1;
+    }
+
+    fn complete(&self) -> QueryValue {
+        QueryValue::Number(self.value as f64)
+    }
+}
+
+#[derive(Default)]
+pub struct AvgAgg {
+    count: u64,
+    acc: f64,
+}
+
+impl Agg for AvgAgg {
+    fn fold(&mut self, params: &[QueryValue]) {
+        if params.is_empty() {
+            return;
+        }
+
+        if let QueryValue::Number(n) = params[0] {
+            self.count += 1;
+            self.acc += n;
+
+            return;
+        }
+
+        self.acc = f64::NAN;
+    }
+
+    fn complete(&self) -> QueryValue {
+        if self.acc.is_nan() {
+            return QueryValue::Number(f64::NAN);
+        }
+
+        if self.count == 0 {
+            QueryValue::Number(0f64)
+        } else {
+            QueryValue::Number(self.acc / self.count as f64)
+        }
+    }
+}
+
+enum AggState {
+    Single(Box<dyn Agg>),
+    Record(CaseInsensitiveHashMap<AggState>),
+}
+
+impl AggState {
+    fn from(options: &AnalysisOptions, query: &Query<Typed>) -> Self {
+        match &query.projection.value {
+            eventql_parser::Value::Record(fields) => {
+                let mut aggs = CaseInsensitiveHashMap::new();
+
+                for field in fields.iter() {
+                    if let eventql_parser::Value::App(app) = &field.value.value {
+                        aggs.insert(
+                            field.name.clone(),
+                            Self::Single(agg_inst_from_func(options, app)),
+                        );
+                        continue;
+                    }
+
+                    let agg: Box<dyn Agg> = Box::new(ConstAgg::default());
+                    aggs.insert(field.name.clone(), Self::Single(agg));
+                }
+
+                Self::Record(aggs)
+            }
+
+            eventql_parser::Value::App(app) => Self::Single(agg_inst_from_func(options, app)),
+
+            _ => unreachable!("we expect an aggregate expression so this case should never happen"),
+        }
+    }
+
+    fn complete(&self) -> QueryValue {
+        match self {
+            AggState::Single(agg) => agg.complete(),
+            AggState::Record(aggs) => {
+                let mut props = BTreeMap::new();
+
+                for (key, agg) in aggs.iter() {
+                    props.insert(key.as_ref().to_owned().into(), agg.complete());
+                }
+
+                QueryValue::Record(props)
+            }
+        }
+    }
+}
+
+fn agg_inst_from_func(options: &AnalysisOptions, app: &App) -> Box<dyn Agg> {
+    if let Type::App {
+        aggregate: true, ..
+    } = options
+        .default_scope
+        .entries
+        .get(app.func.as_str())
+        .expect("func to be defined")
+    {
+        return if app.func.eq_ignore_ascii_case("count") {
+            Box::new(CountAgg::default())
+        } else if app.func.eq_ignore_ascii_case("avg") {
+            Box::new(AvgAgg::default())
+        } else if app.func.eq_ignore_ascii_case("unique") {
+            Box::new(ConstAgg::default())
+        } else {
+            unreachable!("impossible as such function wouldn't pass the static analysis")
+        };
+    }
+
+    panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
+}
+
+enum Emit {
+    Single(AggState),
+    Grouped(HashMap<String, AggState>),
+}
+
+pub struct AggQuery<'a> {
+    srcs: Sources<'a>,
+    query: &'a Query<Typed>,
+    options: &'a AnalysisOptions,
+    buffer: HashMap<&'a str, QueryValue>,
+    emit: Emit,
+    completed: bool,
+    results: Vec<QueryValue>,
+}
+
+impl<'a> AggQuery<'a> {
+    pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
+        let emit = if query.group_by.is_some() {
+            Emit::Grouped(Default::default())
+        } else {
+            Emit::Single(AggState::from(options, query))
+        };
+
+        Self {
+            srcs,
+            query,
+            options,
+            buffer: Default::default(),
+            emit,
+            completed: false,
+            results: Vec::new(),
+        }
+    }
+}
+
+impl<'a> Iterator for AggQuery<'a> {
+    type Item = EvalResult<QueryValue>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.completed {
+                if let Some(result) = self.results.pop() {
+                    return Some(Ok(result));
+                }
+
+                return None;
+            }
+
+            self.buffer.clear();
+
+            let outcome = if let Some(outcome) = self.srcs.fill(&mut self.buffer) {
+                outcome
+            } else {
+                self.completed = true;
+
+                match &self.emit {
+                    Emit::Single(agg) => self.results.push(agg.complete()),
+                    Emit::Grouped(groups) => {
+                        for group in groups.values() {
+                            self.results.push(group.complete());
+                        }
+                    }
+                }
+
+                continue;
+            };
+
+            if let Err(e) = outcome {
+                return Some(Err(e));
+            }
+
+            if let Some(predicate) = &self.query.predicate {
+                match evaluate_predicate(&self.options, &self.buffer, &predicate.value) {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+
+            let agg = if let Emit::Grouped(grouped) = &mut self.emit
+                && let Some(group_by) = &self.query.group_by
+            {
+                let group_key =
+                    match evaluate_value(&self.options, &self.buffer, &group_by.expr.value) {
+                        Err(e) => return Some(Err(e)),
+                        Ok(value) => match value {
+                            QueryValue::String(s) => s.clone(),
+                            QueryValue::Number(n) => n.to_string(),
+                            QueryValue::Bool(b) => b.to_string(),
+                            QueryValue::DateTime(date_time) => date_time.to_string(),
+                            QueryValue::Date(naive_date) => naive_date.to_string(),
+                            QueryValue::Time(naive_time) => naive_time.to_string(),
+                            _ => {
+                                return Some(Err(EvalError::Runtime(
+                                    "unexpected group by value".into(),
+                                )));
+                            }
+                        },
+                    };
+
+                grouped
+                    .entry(group_key)
+                    .or_insert_with(|| AggState::from(&self.options, &self.query))
+            } else if let Emit::Single(agg) = &mut self.emit {
+                agg
+            } else {
+                return Some(Err(EvalError::Runtime(
+                    "wrong code path when running aggregate query".into(),
+                )));
+            };
+
+            if let Err(e) = evaluate_agg_value(
+                &self.options,
+                &self.buffer,
+                &self.query.projection.value,
+                agg,
+            ) {
+                return Some(Err(e));
+            }
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
-pub enum QueryValue<'a> {
+pub enum QueryValue {
     Null,
-    String(Cow<'a, str>),
+    String(String),
     Number(f64),
     Bool(bool),
-    Record(Cow<'a, BTreeMap<&'a str, QueryValue<'a>>>),
-    Array(Cow<'a, [QueryValue<'a>]>),
+    Record(BTreeMap<String, QueryValue>),
+    Array(Vec<QueryValue>),
     DateTime(DateTime<Utc>),
     Date(NaiveDate),
     Time(NaiveTime),
 }
 
-impl QueryValue<'_> {
+impl QueryValue {
     pub fn as_bool(&self) -> EvalResult<bool> {
         if let Self::Bool(b) = self {
             return Ok(*b);
@@ -406,16 +737,188 @@ impl QueryValue<'_> {
             "expected a boolean but got something else".into(),
         ))
     }
+
+    pub fn from(value: serde_json::Value, _tpe: &Type) -> QueryValue {
+        match value {
+            serde_json::Value::Null => QueryValue::Null,
+            serde_json::Value::Bool(b) => QueryValue::Bool(b),
+            serde_json::Value::Number(number) => {
+                QueryValue::Number(number.as_f64().expect("we don't use arbitrary precision"))
+            }
+            serde_json::Value::String(s) => QueryValue::String(s.into()),
+            serde_json::Value::Array(values) => {
+                let values = values
+                    .into_iter()
+                    .map(|v| Self::from(v, _tpe))
+                    .collect::<Vec<_>>();
+
+                QueryValue::Array(values.into())
+            }
+            serde_json::Value::Object(map) => {
+                let mut props = BTreeMap::new();
+                for (name, value) in map {
+                    props.insert(name, Self::from(value, _tpe));
+                }
+
+                QueryValue::Record(props)
+            }
+        }
+    }
+
+    pub fn build_from_type_expectation(value: serde_json::Value, expectation: &Type) -> QueryValue {
+        match expectation {
+            Type::Unspecified => Self::from(value, expectation),
+            Type::Number => {
+                if let serde_json::Value::Number(n) = value {
+                    QueryValue::Number(n.as_f64().expect("we don't use arbitrary precision"))
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::String | Type::Subject => {
+                if let serde_json::Value::String(s) = value {
+                    QueryValue::String(s.into())
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::Bool => {
+                if let serde_json::Value::Bool(b) = value {
+                    QueryValue::Bool(b)
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::Array(tpe) => {
+                if let serde_json::Value::Array(values) = value {
+                    let values = values
+                        .into_iter()
+                        .map(|v| Self::build_from_type_expectation(v, tpe.as_ref()))
+                        .collect();
+
+                    QueryValue::Array(values)
+                } else {
+                    QueryValue::Null
+                }
+            }
+            Type::Record(map) => {
+                if let serde_json::Value::Object(mut values) = value {
+                    let mut props = BTreeMap::new();
+
+                    for (name, tpe) in map.iter() {
+                        let value = if let Some(value) = values.remove(name) {
+                            Self::build_from_type_expectation(value, tpe)
+                        } else {
+                            QueryValue::Null
+                        };
+
+                        // TODO - we might just not insert the value if not present, sparing the clone allocation
+                        props.insert(name.clone(), value);
+                    }
+
+                    QueryValue::Record(props)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            // this one is unlikely because the user cannot expect a function at that level
+            Type::App {
+                args: _x,
+                result: _y,
+                aggregate: _z,
+            } => todo!("use a proper result type so we can track it if it happens in real life"),
+
+            Type::Date => {
+                if let serde_json::Value::String(s) = value
+                    && let Ok(date) = s.parse::<NaiveDate>()
+                {
+                    QueryValue::Date(date)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            Type::Time => {
+                if let serde_json::Value::String(s) = value
+                    && let Ok(time) = s.parse::<NaiveTime>()
+                {
+                    QueryValue::Time(time)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            Type::DateTime => {
+                if let serde_json::Value::String(s) = value
+                    && let Ok(date_time) = s.parse::<DateTime<Utc>>()
+                {
+                    QueryValue::DateTime(date_time)
+                } else {
+                    QueryValue::Null
+                }
+            }
+
+            // currenlty we don't custom type but will change
+            Type::Custom(_) => QueryValue::Null,
+        }
+    }
+}
+
+fn evaluate_agg_value<'a>(
+    options: &AnalysisOptions,
+    env: &HashMap<&'a str, QueryValue>,
+    value: &'a eventql_parser::Value,
+    state: &mut AggState,
+) -> EvalResult<()> {
+    match (state, value) {
+        (AggState::Single(agg), eventql_parser::Value::App(app)) => {
+            let mut args = Vec::with_capacity(app.args.len());
+
+            for arg in &app.args {
+                args.push(evaluate_value(options, env, &arg.value)?);
+            }
+
+            agg.fold(args.as_slice());
+
+            Ok(())
+        }
+
+        (AggState::Single(agg), value) => {
+            let value = evaluate_value(options, env, value)?;
+
+            agg.fold(&[value]);
+
+            Ok(())
+        }
+
+        (AggState::Record(aggs), eventql_parser::Value::Record(props)) => {
+            for prop in props {
+                if let Some(agg) = aggs.get_mut(prop.name.as_str()) {
+                    evaluate_agg_value(options, env, &prop.value.value, agg)?;
+                    continue;
+                }
+
+                return Err(EvalError::Runtime("tagged aggregate not found".into()));
+            }
+
+            Ok(())
+        }
+
+        _ => Err(EvalError::Runtime(
+            "invalid aggregate evaluation code path".into(),
+        )),
+    }
 }
 
 fn evaluate_value<'a>(
     options: &AnalysisOptions,
-    env: &HashMap<&'a str, QueryValue<'a>>,
+    env: &HashMap<&'a str, QueryValue>,
     value: &'a eventql_parser::Value,
-) -> EvalResult<QueryValue<'a>> {
+) -> EvalResult<QueryValue> {
     match value {
         eventql_parser::Value::Number(n) => Ok(QueryValue::Number(*n)),
-        eventql_parser::Value::String(s) => Ok(QueryValue::String(Cow::Borrowed(s.as_str()))),
+        eventql_parser::Value::String(s) => Ok(QueryValue::String(s.clone())),
         eventql_parser::Value::Bool(b) => Ok(QueryValue::Bool(*b)),
         eventql_parser::Value::Id(id) => env
             .get(id.as_str())
@@ -428,7 +931,7 @@ fn evaluate_value<'a>(
                 arr.push(evaluate_value(options, env, &expr.value)?);
             }
 
-            Ok(QueryValue::Array(Cow::Owned(arr)))
+            Ok(QueryValue::Array(arr))
         }
 
         eventql_parser::Value::Record(fields) => {
@@ -436,12 +939,12 @@ fn evaluate_value<'a>(
 
             for field in fields {
                 record.insert(
-                    field.name.as_str(),
+                    field.name.clone(),
                     evaluate_value(options, env, &field.value.value)?,
                 );
             }
 
-            Ok(QueryValue::Record(Cow::Owned(record)))
+            Ok(QueryValue::Record(record))
         }
 
         eventql_parser::Value::Access(access) => {
@@ -583,7 +1086,7 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
             {
                 return Ok(QueryValue::Number(
-                    x.find(y.as_ref()).map(|i| i + 1).unwrap_or_default() as f64,
+                    x.find(y).map(|i| i + 1).unwrap_or_default() as f64,
                 ));
             }
 
@@ -605,21 +1108,21 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
                 && let QueryValue::String(z) = &args[2]
             {
-                return Ok(QueryValue::String(x.replace(y.as_ref(), z.as_ref()).into()));
+                return Ok(QueryValue::String(x.replace(y, z).into()));
             }
 
             if app.func.eq_ignore_ascii_case("startswith")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return Ok(QueryValue::Bool(x.starts_with(y.as_ref())));
+                return Ok(QueryValue::Bool(x.starts_with(y)));
             }
 
             if app.func.eq_ignore_ascii_case("endswith")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return Ok(QueryValue::Bool(x.ends_with(y.as_ref())));
+                return Ok(QueryValue::Bool(x.ends_with(y)));
             }
 
             // -------------
@@ -768,10 +1271,7 @@ fn evaluate_value<'a>(
 }
 
 /// Many runtime error and most can be caught during static analysis.
-fn type_conversion<'a>(
-    value: &QueryValue<'a>,
-    tpe: eventql_parser::Type,
-) -> EvalResult<QueryValue<'a>> {
+fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalResult<QueryValue> {
     match value {
         QueryValue::Null => Ok(QueryValue::Null),
 
@@ -833,9 +1333,9 @@ fn type_conversion<'a>(
 
 fn evaluate_binary_operation<'a>(
     op: Operator,
-    a: &QueryValue<'a>,
-    b: &QueryValue<'a>,
-) -> EvalResult<QueryValue<'a>> {
+    a: &QueryValue,
+    b: &QueryValue,
+) -> EvalResult<QueryValue> {
     match (a, b) {
         (QueryValue::Null, QueryValue::Null) => Ok(QueryValue::Null),
 
@@ -991,19 +1491,23 @@ fn evaluate_binary_operation<'a>(
 
 fn evaluate_predicate<'a>(
     options: &AnalysisOptions,
-    env: &HashMap<&'a str, QueryValue<'a>>,
+    env: &HashMap<&'a str, QueryValue>,
     value: &'a eventql_parser::Value,
 ) -> EvalResult<bool> {
     evaluate_value(options, env, value)?.as_bool()
 }
 
 fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Row<'a> {
-    let mut srcs = Sources::new();
+    let mut srcs = Sources::default();
     for query_src in &query.sources {
         match &query_src.kind {
             eventql_parser::SourceKind::Name(name) => {
                 if name.eq_ignore_ascii_case("events")
-                    && let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name)
+                    && let Some(tpe) = query
+                        .meta
+                        .scope
+                        .entries
+                        .get(query_src.binding.name.as_str())
                 {
                     srcs.insert(
                         &query_src.binding.name,
@@ -1017,7 +1521,12 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
             }
 
             eventql_parser::SourceKind::Subject(path) => {
-                if let Some(tpe) = query.meta.scope.entries.get(&query_src.binding.name) {
+                if let Some(tpe) = query
+                    .meta
+                    .scope
+                    .entries
+                    .get(query_src.binding.name.as_str())
+                {
                     srcs.insert(
                         &query_src.binding.name,
                         Box::new(db.iter_subject(path).map(|e| Ok(e.project(tpe)))),
@@ -1037,5 +1546,9 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
         }
     }
 
-    Box::new(EventQuery::new(srcs, options, query))
+    if query.meta.aggregate {
+        Box::new(AggQuery::new(srcs, options, query))
+    } else {
+        Box::new(EventQuery::new(srcs, options, query))
+    }
 }

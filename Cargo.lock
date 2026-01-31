@@ -36,6 +36,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
+name = "case_insensitive_hashmap"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59ca1ed8675a76594ea5a5ad5cc318d72238cd4975d88f73768508fa577986b8"
+dependencies = [
+ "unicase",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -101,10 +110,11 @@ dependencies = [
 
 [[package]]
 name = "eventql-parser"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509562cace8a53daa2123af5ec580d55b06f26dab745339766ee357d6b28476d"
+checksum = "4426d913c5d3db0c0831974dfe7d25d9ed21ac385f8a600dbe321fdee7734940"
 dependencies = [
+ "case_insensitive_hashmap",
  "nom",
  "nom_locate",
  "serde",
@@ -456,6 +466,7 @@ dependencies = [
 name = "vigil-core"
 version = "0.1.0"
 dependencies = [
+ "case_insensitive_hashmap",
  "chrono",
  "eventql-parser",
  "insta",
