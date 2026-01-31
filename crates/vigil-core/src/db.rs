@@ -589,24 +589,37 @@ fn agg_inst_from_func(options: &AnalysisOptions, app: &App) -> Box<dyn Agg> {
     panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
 }
 
+enum Emit {
+    Single(AggState),
+    Grouped(HashMap<String, AggState>),
+}
+
 pub struct AggQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
     options: &'a AnalysisOptions,
     buffer: HashMap<&'a str, QueryValue>,
-    state: AggState,
+    emit: Emit,
     completed: bool,
+    results: Vec<QueryValue>,
 }
 
 impl<'a> AggQuery<'a> {
     pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
+        let emit = if query.group_by.is_some() {
+            Emit::Grouped(Default::default())
+        } else {
+            Emit::Single(AggState::from(options, query))
+        };
+
         Self {
             srcs,
             query,
             options,
             buffer: Default::default(),
-            state: AggState::from(options, query),
+            emit,
             completed: false,
+            results: Vec::new(),
         }
     }
 }
@@ -616,6 +629,10 @@ impl<'a> Iterator for AggQuery<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.completed {
+            if let Some(result) = self.results.pop() {
+                return Some(Ok(result));
+            }
+
             return None;
         }
 
@@ -626,7 +643,17 @@ impl<'a> Iterator for AggQuery<'a> {
                 outcome
             } else {
                 self.completed = true;
-                return Some(Ok(self.state.complete()));
+
+                match &self.emit {
+                    Emit::Single(agg) => self.results.push(agg.complete()),
+                    Emit::Grouped(groups) => {
+                        for group in groups.values() {
+                            self.results.push(group.complete());
+                        }
+                    }
+                }
+
+                continue;
             };
 
             if let Err(e) = outcome {
@@ -641,11 +668,43 @@ impl<'a> Iterator for AggQuery<'a> {
                 }
             }
 
+            let agg = if let Emit::Grouped(grouped) = &mut self.emit
+                && let Some(group_by) = &self.query.group_by
+            {
+                let group_key =
+                    match evaluate_value(&self.options, &self.buffer, &group_by.expr.value) {
+                        Err(e) => return Some(Err(e)),
+                        Ok(value) => match value {
+                            QueryValue::String(s) => s.clone(),
+                            QueryValue::Number(n) => n.to_string(),
+                            QueryValue::Bool(b) => b.to_string(),
+                            QueryValue::DateTime(date_time) => date_time.to_string(),
+                            QueryValue::Date(naive_date) => naive_date.to_string(),
+                            QueryValue::Time(naive_time) => naive_time.to_string(),
+                            _ => {
+                                return Some(Err(EvalError::Runtime(
+                                    "unexpected group by value".into(),
+                                )));
+                            }
+                        },
+                    };
+
+                grouped
+                    .entry(group_key)
+                    .or_insert_with(|| AggState::from(&self.options, &self.query))
+            } else if let Emit::Single(agg) = &mut self.emit {
+                agg
+            } else {
+                return Some(Err(EvalError::Runtime(
+                    "wrong code path when running aggregate query".into(),
+                )));
+            };
+
             if let Err(e) = evaluate_agg_value(
                 &self.options,
                 &self.buffer,
                 &self.query.projection.value,
-                &mut self.state,
+                agg,
             ) {
                 return Some(Err(e));
             }
