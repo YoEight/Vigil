@@ -55,54 +55,51 @@ pub struct Event {
 }
 
 impl Event {
-    fn project<'a>(&'a self, expected: &'a Type) -> QueryValue<'a> {
+    fn project<'a>(&self, expected: &'a Type) -> QueryValue {
         if let eventql_parser::Type::Record(rec) = expected {
-            let mut props = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
+            let mut props = BTreeMap::new();
             for (name, value) in rec.iter() {
                 match name.as_str() {
                     "spec_version" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str().into(),
+                                name.clone(),
                                 QueryValue::String(self.spec_version.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "id" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str().into(),
+                                name.clone(),
                                 QueryValue::String(self.id.to_string().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "source" => match value {
                         Type::String => {
-                            props.insert(
-                                name.as_str().into(),
-                                QueryValue::String(self.source.as_str().into()),
-                            );
+                            props.insert(name.clone(), QueryValue::String(self.source.clone()));
                         }
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "subject" => match value {
                         Type::String | Type::Subject => {
                             props.insert(
-                                name.as_str().into(),
+                                name.clone(),
                                 QueryValue::String(self.subject.as_str().into()),
                             );
                         }
@@ -115,20 +112,20 @@ impl Event {
                     "type" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str().into(),
+                                name.clone(),
                                 QueryValue::String(self.event_type.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     "datacontenttype" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str().into(),
+                                name.clone(),
                                 QueryValue::String(self.datacontenttype.as_str().into()),
                             );
                         }
@@ -141,7 +138,7 @@ impl Event {
                     "data" => match value {
                         Type::String => {
                             props.insert(
-                                name.as_str().into(),
+                                name.clone(),
                                 QueryValue::String(unsafe {
                                     str::from_utf8_unchecked(self.data.as_slice()).into()
                                 }),
@@ -152,31 +149,31 @@ impl Event {
                             "application/json" => {
                                 if let Ok(payload) = serde_json::from_slice(&self.data) {
                                     props.insert(
-                                        name.as_str().into(),
+                                        name.clone(),
                                         QueryValue::build_from_type_expectation(payload, value),
                                     );
                                 } else {
-                                    props.insert(name.as_str().into(), QueryValue::Null);
+                                    props.insert(name.clone(), QueryValue::Null);
                                 }
                             }
 
                             _ => {
-                                props.insert(name.as_str().into(), QueryValue::Null);
+                                props.insert(name.clone(), QueryValue::Null);
                             }
                         },
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name.clone(), QueryValue::Null);
                         }
                     },
 
                     _ => {
-                        props.insert(name.as_str().into(), QueryValue::Null);
+                        props.insert(name.clone(), QueryValue::Null);
                     }
                 }
             }
 
-            QueryValue::Record(Cow::Owned(props))
+            QueryValue::Record(props)
         } else {
             QueryValue::Null
         }
@@ -339,14 +336,14 @@ impl Db {
     }
 }
 
-type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue<'a>>> + 'a>;
+type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue>> + 'a>;
 
 #[derive(Default)]
 pub struct Sources<'a> {
     inner: HashMap<&'a str, Row<'a>>,
 }
 
-type Buffer<'a> = HashMap<&'a str, QueryValue<'a>>;
+type Buffer<'a> = HashMap<&'a str, QueryValue>;
 
 impl<'a> Sources<'a> {
     fn iter_mut(&mut self) -> impl Iterator<Item = (&&'a str, &mut Row<'a>)> {
@@ -376,7 +373,7 @@ pub struct EventQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
     options: &'a AnalysisOptions,
-    buffer: HashMap<&'a str, QueryValue<'a>>,
+    buffer: HashMap<&'a str, QueryValue>,
 }
 
 impl<'a> EventQuery<'a> {
@@ -391,7 +388,7 @@ impl<'a> EventQuery<'a> {
 }
 
 impl<'a> Iterator for EventQuery<'a> {
-    type Item = EvalResult<QueryValue<'a>>;
+    type Item = EvalResult<QueryValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -437,27 +434,27 @@ impl Consts {
 }
 
 pub trait Agg {
-    fn fold(&mut self, params: &[QueryValue<'_>]);
-    fn complete(&self) -> QueryValue<'static>;
+    fn fold(&mut self, params: &[QueryValue]);
+    fn complete(&self) -> QueryValue;
 }
 
 #[derive(Default)]
 pub struct ConstAgg {
-    inner: Option<QueryValue<'static>>,
+    inner: Option<QueryValue>,
 }
 
 impl Agg for ConstAgg {
-    fn fold(&mut self, params: &[QueryValue<'_>]) {
+    fn fold(&mut self, params: &[QueryValue]) {
         if params.is_empty() {
             return;
         }
 
         if self.inner.is_none() {
-            self.inner = Some(params[0].static_clone());
+            self.inner = Some(params[0].clone());
         }
     }
 
-    fn complete(&self) -> QueryValue<'static> {
+    fn complete(&self) -> QueryValue {
         self.inner.clone().unwrap_or(QueryValue::Null)
     }
 }
@@ -482,7 +479,7 @@ impl Agg for CountAgg {
         self.value += 1;
     }
 
-    fn complete(&self) -> QueryValue<'static> {
+    fn complete(&self) -> QueryValue {
         QueryValue::Number(self.value as f64)
     }
 }
@@ -494,7 +491,7 @@ pub struct AvgAgg {
 }
 
 impl Agg for AvgAgg {
-    fn fold(&mut self, params: &[QueryValue<'_>]) {
+    fn fold(&mut self, params: &[QueryValue]) {
         if params.is_empty() {
             return;
         }
@@ -509,7 +506,7 @@ impl Agg for AvgAgg {
         self.acc = f64::NAN;
     }
 
-    fn complete(&self) -> QueryValue<'static> {
+    fn complete(&self) -> QueryValue {
         if self.acc.is_nan() {
             return QueryValue::Number(f64::NAN);
         }
@@ -555,7 +552,7 @@ impl AggState {
         }
     }
 
-    fn complete(&self) -> QueryValue<'static> {
+    fn complete(&self) -> QueryValue {
         match self {
             AggState::Single(agg) => agg.complete(),
             AggState::Record(aggs) => {
@@ -565,7 +562,7 @@ impl AggState {
                     props.insert(key.as_ref().to_owned().into(), agg.complete());
                 }
 
-                QueryValue::Record(Cow::Owned(props))
+                QueryValue::Record(props)
             }
         }
     }
@@ -596,7 +593,7 @@ pub struct AggQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
     options: &'a AnalysisOptions,
-    buffer: HashMap<&'a str, QueryValue<'a>>,
+    buffer: HashMap<&'a str, QueryValue>,
     state: AggState,
     completed: bool,
 }
@@ -615,7 +612,7 @@ impl<'a> AggQuery<'a> {
 }
 
 impl<'a> Iterator for AggQuery<'a> {
-    type Item = EvalResult<QueryValue<'a>>;
+    type Item = EvalResult<QueryValue>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.completed {
@@ -657,44 +654,19 @@ impl<'a> Iterator for AggQuery<'a> {
 }
 
 #[derive(Clone, Serialize)]
-pub enum QueryValue<'a> {
+pub enum QueryValue {
     Null,
-    String(Cow<'a, str>),
+    String(String),
     Number(f64),
     Bool(bool),
-    Record(Cow<'a, BTreeMap<Cow<'a, str>, QueryValue<'a>>>),
-    Array(Cow<'a, [QueryValue<'a>]>),
+    Record(BTreeMap<String, QueryValue>),
+    Array(Vec<QueryValue>),
     DateTime(DateTime<Utc>),
     Date(NaiveDate),
     Time(NaiveTime),
 }
 
-impl QueryValue<'_> {
-    pub fn static_record<'a>(
-        props: &BTreeMap<Cow<'a, str>, QueryValue<'a>>,
-    ) -> QueryValue<'static> {
-        let mut rec = BTreeMap::new();
-
-        for (name, value) in props.iter() {
-            rec.insert(name.clone().into_owned().into(), value.static_clone());
-        }
-
-        QueryValue::Record(Cow::Owned(rec))
-    }
-
-    pub fn static_clone(&self) -> QueryValue<'static> {
-        match self {
-            Self::Null => QueryValue::Null,
-            Self::String(cow) => QueryValue::String(cow.clone().into_owned().into()),
-            Self::Number(n) => QueryValue::Number(*n),
-            Self::Bool(b) => QueryValue::Bool(*b),
-            Self::Record(cow) => QueryValue::static_record(cow.as_ref()),
-            Self::Array(cow) => todo!(),
-            Self::DateTime(date_time) => todo!(),
-            Self::Date(naive_date) => todo!(),
-            Self::Time(naive_time) => todo!(),
-        }
-    }
+impl QueryValue {
     pub fn as_bool(&self) -> EvalResult<bool> {
         if let Self::Bool(b) = self {
             return Ok(*b);
@@ -705,7 +677,7 @@ impl QueryValue<'_> {
         ))
     }
 
-    pub fn from<'a>(value: serde_json::Value, _tpe: &'a Type) -> QueryValue<'a> {
+    pub fn from(value: serde_json::Value, _tpe: &Type) -> QueryValue {
         match value {
             serde_json::Value::Null => QueryValue::Null,
             serde_json::Value::Bool(b) => QueryValue::Bool(b),
@@ -722,20 +694,17 @@ impl QueryValue<'_> {
                 QueryValue::Array(values.into())
             }
             serde_json::Value::Object(map) => {
-                let mut props = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
+                let mut props = BTreeMap::new();
                 for (name, value) in map {
-                    props.insert(name.into(), Self::from(value, _tpe));
+                    props.insert(name, Self::from(value, _tpe));
                 }
 
-                QueryValue::Record(Cow::Owned(props))
+                QueryValue::Record(props)
             }
         }
     }
 
-    pub fn build_from_type_expectation<'a>(
-        value: serde_json::Value,
-        expectation: &'a Type,
-    ) -> QueryValue<'a> {
+    pub fn build_from_type_expectation(value: serde_json::Value, expectation: &Type) -> QueryValue {
         match expectation {
             Type::Unspecified => Self::from(value, expectation),
             Type::Number => {
@@ -766,14 +735,14 @@ impl QueryValue<'_> {
                         .map(|v| Self::build_from_type_expectation(v, tpe.as_ref()))
                         .collect();
 
-                    QueryValue::Array(Cow::Owned(values))
+                    QueryValue::Array(values)
                 } else {
                     QueryValue::Null
                 }
             }
             Type::Record(map) => {
                 if let serde_json::Value::Object(mut values) = value {
-                    let mut props = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
+                    let mut props = BTreeMap::new();
 
                     for (name, tpe) in map.iter() {
                         let value = if let Some(value) = values.remove(name) {
@@ -782,10 +751,11 @@ impl QueryValue<'_> {
                             QueryValue::Null
                         };
 
-                        props.insert(name.as_str().into(), value);
+                        // TODO - we might just not insert the value if not present, sparing the clone allocation
+                        props.insert(name.clone(), value);
                     }
 
-                    QueryValue::Record(Cow::Owned(props))
+                    QueryValue::Record(props)
                 } else {
                     QueryValue::Null
                 }
@@ -836,7 +806,7 @@ impl QueryValue<'_> {
 
 fn evaluate_agg_value<'a>(
     options: &AnalysisOptions,
-    env: &HashMap<&'a str, QueryValue<'a>>,
+    env: &HashMap<&'a str, QueryValue>,
     value: &'a eventql_parser::Value,
     state: &mut AggState,
 ) -> EvalResult<()> {
@@ -882,12 +852,12 @@ fn evaluate_agg_value<'a>(
 
 fn evaluate_value<'a>(
     options: &AnalysisOptions,
-    env: &HashMap<&'a str, QueryValue<'a>>,
+    env: &HashMap<&'a str, QueryValue>,
     value: &'a eventql_parser::Value,
-) -> EvalResult<QueryValue<'a>> {
+) -> EvalResult<QueryValue> {
     match value {
         eventql_parser::Value::Number(n) => Ok(QueryValue::Number(*n)),
-        eventql_parser::Value::String(s) => Ok(QueryValue::String(Cow::Borrowed(s.as_str()))),
+        eventql_parser::Value::String(s) => Ok(QueryValue::String(s.clone())),
         eventql_parser::Value::Bool(b) => Ok(QueryValue::Bool(*b)),
         eventql_parser::Value::Id(id) => env
             .get(id.as_str())
@@ -900,20 +870,20 @@ fn evaluate_value<'a>(
                 arr.push(evaluate_value(options, env, &expr.value)?);
             }
 
-            Ok(QueryValue::Array(Cow::Owned(arr)))
+            Ok(QueryValue::Array(arr))
         }
 
         eventql_parser::Value::Record(fields) => {
-            let mut record = BTreeMap::<Cow<'a, str>, QueryValue<'a>>::new();
+            let mut record = BTreeMap::new();
 
             for field in fields {
                 record.insert(
-                    field.name.as_str().into(),
+                    field.name.clone(),
                     evaluate_value(options, env, &field.value.value)?,
                 );
             }
 
-            Ok(QueryValue::Record(Cow::Owned(record)))
+            Ok(QueryValue::Record(record))
         }
 
         eventql_parser::Value::Access(access) => {
@@ -1055,7 +1025,7 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
             {
                 return Ok(QueryValue::Number(
-                    x.find(y.as_ref()).map(|i| i + 1).unwrap_or_default() as f64,
+                    x.find(y).map(|i| i + 1).unwrap_or_default() as f64,
                 ));
             }
 
@@ -1077,21 +1047,21 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
                 && let QueryValue::String(z) = &args[2]
             {
-                return Ok(QueryValue::String(x.replace(y.as_ref(), z.as_ref()).into()));
+                return Ok(QueryValue::String(x.replace(y, z).into()));
             }
 
             if app.func.eq_ignore_ascii_case("startswith")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return Ok(QueryValue::Bool(x.starts_with(y.as_ref())));
+                return Ok(QueryValue::Bool(x.starts_with(y)));
             }
 
             if app.func.eq_ignore_ascii_case("endswith")
                 && let QueryValue::String(x) = &args[0]
                 && let QueryValue::String(y) = &args[1]
             {
-                return Ok(QueryValue::Bool(x.ends_with(y.as_ref())));
+                return Ok(QueryValue::Bool(x.ends_with(y)));
             }
 
             // -------------
@@ -1240,10 +1210,7 @@ fn evaluate_value<'a>(
 }
 
 /// Many runtime error and most can be caught during static analysis.
-fn type_conversion<'a>(
-    value: &QueryValue<'a>,
-    tpe: eventql_parser::Type,
-) -> EvalResult<QueryValue<'a>> {
+fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalResult<QueryValue> {
     match value {
         QueryValue::Null => Ok(QueryValue::Null),
 
@@ -1305,9 +1272,9 @@ fn type_conversion<'a>(
 
 fn evaluate_binary_operation<'a>(
     op: Operator,
-    a: &QueryValue<'a>,
-    b: &QueryValue<'a>,
-) -> EvalResult<QueryValue<'a>> {
+    a: &QueryValue,
+    b: &QueryValue,
+) -> EvalResult<QueryValue> {
     match (a, b) {
         (QueryValue::Null, QueryValue::Null) => Ok(QueryValue::Null),
 
@@ -1463,7 +1430,7 @@ fn evaluate_binary_operation<'a>(
 
 fn evaluate_predicate<'a>(
     options: &AnalysisOptions,
-    env: &HashMap<&'a str, QueryValue<'a>>,
+    env: &HashMap<&'a str, QueryValue>,
     value: &'a eventql_parser::Value,
 ) -> EvalResult<bool> {
     evaluate_value(options, env, value)?.as_bool()
