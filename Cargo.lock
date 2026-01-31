@@ -466,6 +466,7 @@ dependencies = [
 name = "vigil-core"
 version = "0.1.0"
 dependencies = [
+ "case_insensitive_hashmap",
  "chrono",
  "eventql-parser",
  "insta",

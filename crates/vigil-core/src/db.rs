@@ -7,6 +7,7 @@ use std::{
     str::Split,
 };
 
+use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
     App, Query, Type,
@@ -437,7 +438,7 @@ impl Consts {
 
 pub trait Agg {
     fn fold(&mut self, params: &[QueryValue<'_>]);
-    fn complete(self) -> QueryValue<'static>;
+    fn complete(&self) -> QueryValue<'static>;
 }
 
 #[derive(Default)]
@@ -456,8 +457,8 @@ impl Agg for ConstAgg {
         }
     }
 
-    fn complete(self) -> QueryValue<'static> {
-        self.inner.unwrap_or(QueryValue::Null)
+    fn complete(&self) -> QueryValue<'static> {
+        self.inner.clone().unwrap_or(QueryValue::Null)
     }
 }
 
@@ -481,7 +482,7 @@ impl Agg for CountAgg {
         self.value += 1;
     }
 
-    fn complete(self) -> QueryValue<'static> {
+    fn complete(&self) -> QueryValue<'static> {
         QueryValue::Number(self.value as f64)
     }
 }
@@ -508,7 +509,7 @@ impl Agg for AvgAgg {
         self.acc = f64::NAN;
     }
 
-    fn complete(self) -> QueryValue<'static> {
+    fn complete(&self) -> QueryValue<'static> {
         if self.acc.is_nan() {
             return QueryValue::Number(f64::NAN);
         }
@@ -523,22 +524,26 @@ impl Agg for AvgAgg {
 
 enum AggState {
     Single(Box<dyn Agg>),
-    Record(BTreeMap<String, Box<dyn Agg>>),
+    Record(CaseInsensitiveHashMap<AggState>),
 }
 
 impl AggState {
     fn from(options: &AnalysisOptions, query: &Query<Typed>) -> Self {
         match &query.projection.value {
             eventql_parser::Value::Record(fields) => {
-                let mut aggs = BTreeMap::<String, Box<dyn Agg>>::new();
+                let mut aggs = CaseInsensitiveHashMap::new();
 
                 for field in fields.iter() {
                     if let eventql_parser::Value::App(app) = &field.value.value {
-                        aggs.insert(field.name.to_lowercase(), agg_inst_from_func(options, app));
+                        aggs.insert(
+                            field.name.clone(),
+                            Self::Single(agg_inst_from_func(options, app)),
+                        );
                         continue;
                     }
 
-                    aggs.insert(field.name.to_lowercase(), Box::new(ConstAgg::default()));
+                    let agg: Box<dyn Agg> = Box::new(ConstAgg::default());
+                    aggs.insert(field.name.clone(), Self::Single(agg));
                 }
 
                 Self::Record(aggs)
@@ -547,6 +552,21 @@ impl AggState {
             eventql_parser::Value::App(app) => Self::Single(agg_inst_from_func(options, app)),
 
             _ => unreachable!("we expect an aggregate expression so this case should never happen"),
+        }
+    }
+
+    fn complete(&self) -> QueryValue<'static> {
+        match self {
+            AggState::Single(agg) => agg.complete(),
+            AggState::Record(aggs) => {
+                let mut props = BTreeMap::new();
+
+                for (key, agg) in aggs.iter() {
+                    props.insert(key.as_ref().to_owned().into(), agg.complete());
+                }
+
+                QueryValue::Record(Cow::Owned(props))
+            }
         }
     }
 }
@@ -578,6 +598,7 @@ pub struct AggQuery<'a> {
     options: &'a AnalysisOptions,
     buffer: HashMap<&'a str, QueryValue<'a>>,
     state: AggState,
+    completed: bool,
 }
 
 impl<'a> AggQuery<'a> {
@@ -588,6 +609,7 @@ impl<'a> AggQuery<'a> {
             options,
             buffer: Default::default(),
             state: AggState::from(options, query),
+            completed: false,
         }
     }
 }
@@ -596,10 +618,21 @@ impl<'a> Iterator for AggQuery<'a> {
     type Item = EvalResult<QueryValue<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.completed {
+            return None;
+        }
+
         loop {
             self.buffer.clear();
 
-            if let Err(e) = self.srcs.fill(&mut self.buffer)? {
+            let outcome = if let Some(outcome) = self.srcs.fill(&mut self.buffer) {
+                outcome
+            } else {
+                self.completed = true;
+                return Some(Ok(self.state.complete()));
+            };
+
+            if let Err(e) = outcome {
                 return Some(Err(e));
             }
 
@@ -609,6 +642,15 @@ impl<'a> Iterator for AggQuery<'a> {
                     Ok(true) => {}
                     Err(e) => return Some(Err(e)),
                 }
+            }
+
+            if let Err(e) = evaluate_agg_value(
+                &self.options,
+                &self.buffer,
+                &self.query.projection.value,
+                &mut self.state,
+            ) {
+                return Some(Err(e));
             }
         }
     }
@@ -797,8 +839,45 @@ fn evaluate_agg_value<'a>(
     env: &HashMap<&'a str, QueryValue<'a>>,
     value: &'a eventql_parser::Value,
     state: &mut AggState,
-) -> EvalResult<QueryValue<'a>> {
-    todo!()
+) -> EvalResult<()> {
+    match (state, value) {
+        (AggState::Single(agg), eventql_parser::Value::App(app)) => {
+            let mut args = Vec::with_capacity(app.args.len());
+
+            for arg in &app.args {
+                args.push(evaluate_value(options, env, &arg.value)?);
+            }
+
+            agg.fold(args.as_slice());
+
+            Ok(())
+        }
+
+        (AggState::Single(agg), value) => {
+            let value = evaluate_value(options, env, value)?;
+
+            agg.fold(&[value]);
+
+            Ok(())
+        }
+
+        (AggState::Record(aggs), eventql_parser::Value::Record(props)) => {
+            for prop in props {
+                if let Some(agg) = aggs.get_mut(prop.name.as_str()) {
+                    evaluate_agg_value(options, env, &prop.value.value, agg)?;
+                    continue;
+                }
+
+                return Err(EvalError::Runtime("tagged aggregate not found".into()));
+            }
+
+            todo!()
+        }
+
+        _ => Err(EvalError::Runtime(
+            "invalid aggregate evaluation code path".into(),
+        )),
+    }
 }
 
 fn evaluate_value<'a>(
