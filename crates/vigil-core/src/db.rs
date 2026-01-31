@@ -1,14 +1,15 @@
+use core::f64;
 use std::{
     borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, VecDeque},
-    f64, iter,
+    iter,
     str::Split,
 };
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use eventql_parser::{
-    Query, Type,
+    App, Query, Type,
     prelude::{AnalysisOptions, Operator, Typed},
 };
 use rand::Rng;
@@ -456,7 +457,7 @@ impl Agg for ConstAgg {
     }
 
     fn complete(self) -> QueryValue<'static> {
-        todo!()
+        self.inner.unwrap_or(QueryValue::Null)
     }
 }
 
@@ -485,6 +486,41 @@ impl Agg for CountAgg {
     }
 }
 
+#[derive(Default)]
+pub struct AvgAgg {
+    count: u64,
+    acc: f64,
+}
+
+impl Agg for AvgAgg {
+    fn fold(&mut self, params: &[QueryValue<'_>]) {
+        if params.is_empty() {
+            return;
+        }
+
+        if let QueryValue::Number(n) = params[0] {
+            self.count += 1;
+            self.acc += n;
+
+            return;
+        }
+
+        self.acc = f64::NAN;
+    }
+
+    fn complete(self) -> QueryValue<'static> {
+        if self.acc.is_nan() {
+            return QueryValue::Number(f64::NAN);
+        }
+
+        if self.count == 0 {
+            QueryValue::Number(0f64)
+        } else {
+            QueryValue::Number(self.acc / self.count as f64)
+        }
+    }
+}
+
 enum AggState {
     Single(Box<dyn Agg>),
     Record(BTreeMap<String, Box<dyn Agg>>),
@@ -497,24 +533,8 @@ impl AggState {
                 let mut aggs = BTreeMap::<String, Box<dyn Agg>>::new();
 
                 for field in fields.iter() {
-                    if let eventql_parser::Value::App(app) = &field.value.value
-                        && let Type::App {
-                            aggregate: true, ..
-                        } = options
-                            .default_scope
-                            .entries
-                            .get(app.func.as_str())
-                            .expect("must be defined")
-                    {
-                        let agg = if app.func.eq_ignore_ascii_case("count") {
-                            Box::new(CountAgg::default())
-                        } else {
-                            unreachable!(
-                                "impossible as such function wouldn't pass the static analysis"
-                            )
-                        };
-
-                        aggs.insert(field.name.to_lowercase(), agg);
+                    if let eventql_parser::Value::App(app) = &field.value.value {
+                        aggs.insert(field.name.to_lowercase(), agg_inst_from_func(options, app));
                         continue;
                     }
 
@@ -524,9 +544,32 @@ impl AggState {
                 Self::Record(aggs)
             }
 
-            _ => todo!(),
+            eventql_parser::Value::App(app) => Self::Single(agg_inst_from_func(options, app)),
+
+            _ => unreachable!("we expect an aggregate expression so this case should never happen"),
         }
     }
+}
+
+fn agg_inst_from_func(options: &AnalysisOptions, app: &App) -> Box<dyn Agg> {
+    if let Type::App {
+        aggregate: true, ..
+    } = options
+        .default_scope
+        .entries
+        .get(app.func.as_str())
+        .expect("func to be defined")
+    {
+        return if app.func.eq_ignore_ascii_case("count") {
+            Box::new(CountAgg::default())
+        } else if app.func.eq_ignore_ascii_case("avg") {
+            Box::new(AvgAgg::default())
+        } else {
+            unreachable!("impossible as such function wouldn't pass the static analysis")
+        };
+    }
+
+    panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
 }
 
 pub struct AggQuery<'a> {
@@ -747,6 +790,15 @@ impl QueryValue<'_> {
             Type::Custom(_) => QueryValue::Null,
         }
     }
+}
+
+fn evaluate_agg_value<'a>(
+    options: &AnalysisOptions,
+    env: &HashMap<&'a str, QueryValue<'a>>,
+    value: &'a eventql_parser::Value,
+    state: &mut AggState,
+) -> EvalResult<QueryValue<'a>> {
+    todo!()
 }
 
 fn evaluate_value<'a>(
@@ -1387,5 +1439,9 @@ fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>
         }
     }
 
-    Box::new(EventQuery::new(srcs, options, query))
+    if query.meta.aggregate {
+        Box::new(AggQuery::new(srcs, options, query))
+    } else {
+        Box::new(EventQuery::new(srcs, options, query))
+    }
 }
