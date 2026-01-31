@@ -55,7 +55,7 @@ pub struct Event {
 }
 
 impl Event {
-    fn project<'a>(&self, expected: &'a Type) -> QueryValue {
+    fn project(&self, expected: &Type) -> QueryValue {
         if let eventql_parser::Type::Record(rec) = expected {
             let mut props = BTreeMap::new();
             for (name, value) in rec.iter() {
@@ -75,10 +75,7 @@ impl Event {
 
                     "id" => match value {
                         Type::String => {
-                            props.insert(
-                                name.clone(),
-                                QueryValue::String(self.id.to_string().into()),
-                            );
+                            props.insert(name.clone(), QueryValue::String(self.id.to_string()));
                         }
 
                         _ => {
@@ -190,7 +187,7 @@ impl Subject {
     fn entries<'a>(&mut self, mut path: impl Iterator<Item = &'a str>) -> &mut Vec<usize> {
         let name = path.next().unwrap_or_default();
 
-        if name != "" {
+        if !name.is_empty() {
             return self.nodes.entry(name.to_owned()).or_default().entries(path);
         }
 
@@ -400,7 +397,7 @@ impl<'a> Iterator for EventQuery<'a> {
             }
 
             if let Some(predicate) = &self.query.predicate {
-                match evaluate_predicate(&self.options, &self.buffer, &predicate.value) {
+                match evaluate_predicate(self.options, &self.buffer, &predicate.value) {
                     Ok(false) => continue,
                     Ok(true) => {}
                     Err(e) => return Some(Err(e)),
@@ -408,7 +405,7 @@ impl<'a> Iterator for EventQuery<'a> {
             }
 
             return Some(evaluate_value(
-                &self.options,
+                self.options,
                 &self.buffer,
                 &self.query.projection.value,
             ));
@@ -416,22 +413,23 @@ impl<'a> Iterator for EventQuery<'a> {
     }
 }
 
-#[derive(Copy, Clone, Default)]
-struct Consts {
-    now: Option<DateTime<Utc>>,
-}
+// TODO - in due time
+// #[derive(Copy, Clone, Default)]
+// struct Consts {
+//     now: Option<DateTime<Utc>>,
+// }
 
-impl Consts {
-    fn now(&mut self) -> DateTime<Utc> {
-        if let Some(dt) = &self.now {
-            return *dt;
-        }
+// impl Consts {
+//     fn now(&mut self) -> DateTime<Utc> {
+//         if let Some(dt) = &self.now {
+//             return *dt;
+//         }
 
-        let now = Utc::now();
-        self.now = Some(now);
-        now
-    }
-}
+//         let now = Utc::now();
+//         self.now = Some(now);
+//         now
+//     }
+// }
 
 pub trait Agg {
     fn fold(&mut self, params: &[QueryValue]);
@@ -559,7 +557,7 @@ impl AggState {
                 let mut props = BTreeMap::new();
 
                 for (key, agg) in aggs.iter() {
-                    props.insert(key.as_ref().to_owned().into(), agg.complete());
+                    props.insert(key.as_ref().to_owned(), agg.complete());
                 }
 
                 QueryValue::Record(props)
@@ -663,7 +661,7 @@ impl<'a> Iterator for AggQuery<'a> {
             }
 
             if let Some(predicate) = &self.query.predicate {
-                match evaluate_predicate(&self.options, &self.buffer, &predicate.value) {
+                match evaluate_predicate(self.options, &self.buffer, &predicate.value) {
                     Ok(false) => continue,
                     Ok(true) => {}
                     Err(e) => return Some(Err(e)),
@@ -674,7 +672,7 @@ impl<'a> Iterator for AggQuery<'a> {
                 && let Some(group_by) = &self.query.group_by
             {
                 let group_key =
-                    match evaluate_value(&self.options, &self.buffer, &group_by.expr.value) {
+                    match evaluate_value(self.options, &self.buffer, &group_by.expr.value) {
                         Err(e) => return Some(Err(e)),
                         Ok(value) => match value {
                             QueryValue::String(s) => s.clone(),
@@ -693,7 +691,7 @@ impl<'a> Iterator for AggQuery<'a> {
 
                 grouped
                     .entry(group_key)
-                    .or_insert_with(|| AggState::from(&self.options, &self.query))
+                    .or_insert_with(|| AggState::from(self.options, self.query))
             } else if let Emit::Single(agg) = &mut self.emit {
                 agg
             } else {
@@ -703,7 +701,7 @@ impl<'a> Iterator for AggQuery<'a> {
             };
 
             if let Err(e) = evaluate_agg_value(
-                &self.options,
+                self.options,
                 &self.buffer,
                 &self.query.projection.value,
                 agg,
@@ -745,14 +743,14 @@ impl QueryValue {
             serde_json::Value::Number(number) => {
                 QueryValue::Number(number.as_f64().expect("we don't use arbitrary precision"))
             }
-            serde_json::Value::String(s) => QueryValue::String(s.into()),
+            serde_json::Value::String(s) => QueryValue::String(s),
             serde_json::Value::Array(values) => {
                 let values = values
                     .into_iter()
                     .map(|v| Self::from(v, _tpe))
                     .collect::<Vec<_>>();
 
-                QueryValue::Array(values.into())
+                QueryValue::Array(values)
             }
             serde_json::Value::Object(map) => {
                 let mut props = BTreeMap::new();
@@ -777,7 +775,7 @@ impl QueryValue {
             }
             Type::String | Type::Subject => {
                 if let serde_json::Value::String(s) = value {
-                    QueryValue::String(s.into())
+                    QueryValue::String(s)
                 } else {
                     QueryValue::Null
                 }
@@ -1048,31 +1046,31 @@ fn evaluate_value<'a>(
             if app.func.eq_ignore_ascii_case("lower")
                 && let QueryValue::String(s) = &args[0]
             {
-                return Ok(QueryValue::String(s.to_lowercase().into()));
+                return Ok(QueryValue::String(s.to_lowercase()));
             }
 
             if app.func.eq_ignore_ascii_case("upper")
                 && let QueryValue::String(s) = &args[0]
             {
-                return Ok(QueryValue::String(s.to_uppercase().into()));
+                return Ok(QueryValue::String(s.to_uppercase()));
             }
 
             if app.func.eq_ignore_ascii_case("trim")
                 && let QueryValue::String(s) = &args[0]
             {
-                return Ok(QueryValue::String(s.trim().to_owned().into()));
+                return Ok(QueryValue::String(s.trim().to_owned()));
             }
 
             if app.func.eq_ignore_ascii_case("ltrim")
                 && let QueryValue::String(s) = &args[0]
             {
-                return Ok(QueryValue::String(s.trim_start().to_owned().into()));
+                return Ok(QueryValue::String(s.trim_start().to_owned()));
             }
 
             if app.func.eq_ignore_ascii_case("rtrim")
                 && let QueryValue::String(s) = &args[0]
             {
-                return Ok(QueryValue::String(s.trim_end().to_owned().into()));
+                return Ok(QueryValue::String(s.trim_end().to_owned()));
             }
 
             if app.func.eq_ignore_ascii_case("len")
@@ -1108,7 +1106,7 @@ fn evaluate_value<'a>(
                 && let QueryValue::String(y) = &args[1]
                 && let QueryValue::String(z) = &args[2]
             {
-                return Ok(QueryValue::String(x.replace(y, z).into()));
+                return Ok(QueryValue::String(x.replace(y, z)));
             }
 
             if app.func.eq_ignore_ascii_case("startswith")
@@ -1271,7 +1269,7 @@ fn evaluate_value<'a>(
 }
 
 /// Many runtime error and most can be caught during static analysis.
-fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalResult<QueryValue> {
+fn type_conversion(value: &QueryValue, tpe: eventql_parser::Type) -> EvalResult<QueryValue> {
     match value {
         QueryValue::Null => Ok(QueryValue::Null),
 
@@ -1286,14 +1284,14 @@ fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalRes
 
         QueryValue::Number(n) => match tpe {
             eventql_parser::Type::Number => Ok(QueryValue::Number(*n)),
-            eventql_parser::Type::String => Ok(QueryValue::String(n.to_string().into())),
+            eventql_parser::Type::String => Ok(QueryValue::String(n.to_string())),
             _ => Err(EvalError::Runtime(
                 format!("cannot convert Number to {tpe}").into(),
             )),
         },
 
         QueryValue::Bool(b) => match tpe {
-            eventql_parser::Type::String => Ok(QueryValue::String(b.to_string().into())),
+            eventql_parser::Type::String => Ok(QueryValue::String(b.to_string())),
             eventql_parser::Type::Bool => Ok(QueryValue::Bool(*b)),
             _ => Err(EvalError::Runtime(
                 format!("cannot convert Bool to {tpe}").into(),
@@ -1304,7 +1302,7 @@ fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalRes
         QueryValue::Array(_) => Err(EvalError::Runtime("cannot convert Array".into())),
 
         QueryValue::DateTime(date_time) => match tpe {
-            eventql_parser::Type::String => Ok(QueryValue::String(date_time.to_string().into())),
+            eventql_parser::Type::String => Ok(QueryValue::String(date_time.to_string())),
             eventql_parser::Type::Date => Ok(QueryValue::Date(date_time.date_naive())),
             eventql_parser::Type::Time => Ok(QueryValue::Time(date_time.time())),
             eventql_parser::Type::DateTime => Ok(QueryValue::DateTime(*date_time)),
@@ -1314,7 +1312,7 @@ fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalRes
         },
 
         QueryValue::Date(naive_date) => match tpe {
-            eventql_parser::Type::String => Ok(QueryValue::String(naive_date.to_string().into())),
+            eventql_parser::Type::String => Ok(QueryValue::String(naive_date.to_string())),
             eventql_parser::Type::Date => Ok(QueryValue::Date(*naive_date)),
             _ => Err(EvalError::Runtime(
                 format!("cannot convert Date to {tpe}").into(),
@@ -1322,7 +1320,7 @@ fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalRes
         },
 
         QueryValue::Time(naive_time) => match tpe {
-            eventql_parser::Type::String => Ok(QueryValue::String(naive_time.to_string().into())),
+            eventql_parser::Type::String => Ok(QueryValue::String(naive_time.to_string())),
             eventql_parser::Type::Time => Ok(QueryValue::Time(*naive_time)),
             _ => Err(EvalError::Runtime(
                 format!("cannot convert Time to {tpe}").into(),
@@ -1331,7 +1329,7 @@ fn type_conversion<'a>(value: &QueryValue, tpe: eventql_parser::Type) -> EvalRes
     }
 }
 
-fn evaluate_binary_operation<'a>(
+fn evaluate_binary_operation(
     op: Operator,
     a: &QueryValue,
     b: &QueryValue,
