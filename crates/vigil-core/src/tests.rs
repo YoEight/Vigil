@@ -1,7 +1,11 @@
 use eventql_parser::{parse_query, prelude::AnalysisOptions};
 use uuid::uuid;
 
-use crate::db::{Db, EvalResult, Event, QueryValue};
+use crate::{
+    db::{Db, Event},
+    eval::EvalResult,
+    values::QueryValue,
+};
 
 #[test]
 fn test_append() {
