@@ -1,8 +1,9 @@
 use eventql_parser::{
-    Query,
+    Order, Query,
     prelude::{AnalysisOptions, Typed},
 };
 
+use crate::queries::orderer::QueryOrderer;
 use crate::{
     eval::{EvalResult, Interpreter},
     queries::Sources,
@@ -13,6 +14,8 @@ pub struct EventQuery<'a> {
     srcs: Sources<'a>,
     query: &'a Query<Typed>,
     interpreter: Interpreter<'a>,
+    orderer: QueryOrderer,
+    completed: bool,
 }
 
 impl<'a> EventQuery<'a> {
@@ -20,7 +23,14 @@ impl<'a> EventQuery<'a> {
         Self {
             srcs,
             query,
+            orderer: QueryOrderer::new(
+                query
+                    .order_by
+                    .as_ref()
+                    .map_or_else(|| Order::Asc, |o| o.order),
+            ),
             interpreter: Interpreter::new(options),
+            completed: false,
         }
     }
 }
@@ -30,17 +40,41 @@ impl<'a> Iterator for EventQuery<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let outcome = self.srcs.fill(self.interpreter.env_mut())?;
-            if let Err(e) = outcome {
-                return Some(Err(e));
+            if self.completed {
+                let value = self.orderer.next()?;
+                return Some(Ok(value));
             }
 
-            if let Some(predicate) = &self.query.predicate {
-                match self.interpreter.eval_predicate(&predicate.value) {
-                    Ok(false) => continue,
-                    Ok(true) => {}
-                    Err(e) => return Some(Err(e)),
+            if let Some(outcome) = self.srcs.fill(self.interpreter.env_mut()) {
+                if let Err(e) = outcome {
+                    return Some(Err(e));
                 }
+            } else {
+                self.completed = true;
+                self.orderer.prepare_for_streaming()?;
+
+                continue;
+            }
+
+            match self.interpreter.eval_predicate(self.query) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => return Some(Err(e)),
+            }
+
+            if let Some(order_by) = &self.query.order_by {
+                let key = match self.interpreter.eval(&order_by.expr.value) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(key) => key,
+                };
+
+                let value = match self.interpreter.eval(&self.query.projection.value) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(v) => v,
+                };
+
+                self.orderer.insert(key, value);
+                continue;
             }
 
             return Some(self.interpreter.eval(&self.query.projection.value));

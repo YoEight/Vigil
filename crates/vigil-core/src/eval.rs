@@ -6,7 +6,8 @@ use std::{
 };
 
 use chrono::{Datelike, Timelike, Utc};
-use eventql_parser::prelude::{AnalysisOptions, Operator};
+use eventql_parser::Query;
+use eventql_parser::prelude::{AnalysisOptions, Operator, Typed};
 use rand::Rng;
 use serde::Serialize;
 use thiserror::Error;
@@ -276,8 +277,12 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn eval_predicate(&self, value: &'a eventql_parser::Value) -> EvalResult<bool> {
-        self.eval(value)?.as_bool()
+    pub fn eval_predicate(&self, query: &'a Query<Typed>) -> EvalResult<bool> {
+        if let Some(predicate) = &query.predicate {
+            return self.eval(&predicate.value)?.as_bool();
+        }
+
+        Ok(true)
     }
 
     pub fn eval(&self, value: &'a eventql_parser::Value) -> EvalResult<QueryValue> {

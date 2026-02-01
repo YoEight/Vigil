@@ -2,14 +2,15 @@ mod average;
 mod count;
 mod unique;
 
-use std::collections::{BTreeMap, HashMap};
-
 use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use eventql_parser::{
-    App, Query, Type,
+    App, Order, Query, Type,
     prelude::{AnalysisOptions, Typed},
 };
+use std::collections::{BTreeMap, HashMap};
+use std::vec;
 
+use crate::queries::orderer::QueryOrderer;
 use crate::{
     eval::{EvalError, EvalResult, Interpreter},
     queries::{
@@ -39,7 +40,7 @@ impl AggState {
                     if let eventql_parser::Value::App(app) = &field.value.value {
                         aggs.insert(
                             field.name.clone(),
-                            Self::Single(instanciate_aggregate(options, app)),
+                            Self::Single(instantiate_aggregate(options, app)),
                         );
                         continue;
                     }
@@ -51,7 +52,7 @@ impl AggState {
                 Self::Record(aggs)
             }
 
-            eventql_parser::Value::App(app) => Self::Single(instanciate_aggregate(options, app)),
+            eventql_parser::Value::App(app) => Self::Single(instantiate_aggregate(options, app)),
 
             _ => unreachable!("we expect an aggregate expression so this case should never happen"),
         }
@@ -73,7 +74,21 @@ impl AggState {
     }
 }
 
-fn instanciate_aggregate(options: &AnalysisOptions, app: &App) -> Box<dyn Aggregate> {
+fn instantiate_ordered_aggregate<'a>(
+    options: &'a AnalysisOptions,
+    order_by: &'a eventql_parser::OrderBy,
+) -> Option<AggOrdered<'a>> {
+    if let eventql_parser::Value::App(app) = &order_by.expr.value {
+        Some(AggOrdered {
+            expr: &order_by.expr,
+            agg: AggState::Single(instantiate_aggregate(options, app)),
+        })
+    } else {
+        None
+    }
+}
+
+fn instantiate_aggregate(options: &AnalysisOptions, app: &App) -> Box<dyn Aggregate> {
     if let Type::App {
         aggregate: true, ..
     } = options
@@ -96,24 +111,51 @@ fn instanciate_aggregate(options: &AnalysisOptions, app: &App) -> Box<dyn Aggreg
     panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
 }
 
-enum Emit {
+enum Emit<'a> {
     Single(AggState),
-    Grouped(HashMap<String, AggState>),
+    Grouped {
+        ordered: Option<Order>,
+        aggs: HashMap<String, AggGroup<'a>>,
+    },
+}
+
+struct AggGroup<'a> {
+    ordered: Option<AggOrdered<'a>>,
+    state: AggState,
+}
+
+impl<'a> AggGroup<'a> {
+    fn update_order_agg(&mut self, interpreter: &Interpreter) -> EvalResult<()> {
+        if let Some(agg) = &mut self.ordered {
+            eval_agg_value(interpreter, &agg.expr.value, &mut agg.agg)?;
+        }
+
+        Ok(())
+    }
+}
+
+struct AggOrdered<'a> {
+    expr: &'a eventql_parser::Expr,
+    agg: AggState,
 }
 
 pub struct AggQuery<'a> {
     srcs: Sources<'a>,
     interpreter: Interpreter<'a>,
     query: &'a Query<Typed>,
-    emit: Emit,
+    emit: Emit<'a>,
     completed: bool,
-    results: Vec<QueryValue>,
+    options: &'a AnalysisOptions,
+    results: vec::IntoIter<QueryValue>,
 }
 
 impl<'a> AggQuery<'a> {
     pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
         let emit = if query.group_by.is_some() {
-            Emit::Grouped(Default::default())
+            Emit::Grouped {
+                ordered: query.order_by.as_ref().map(|o| o.order),
+                aggs: Default::default(),
+            }
         } else {
             Emit::Single(AggState::from(options, query))
         };
@@ -123,8 +165,9 @@ impl<'a> AggQuery<'a> {
             query,
             interpreter: Interpreter::new(options),
             emit,
+            options,
             completed: false,
-            results: Vec::new(),
+            results: Default::default(),
         }
     }
 }
@@ -135,7 +178,7 @@ impl<'a> Iterator for AggQuery<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.completed {
-                if let Some(result) = self.results.pop() {
+                if let Some(result) = self.results.next() {
                     return Some(Ok(result));
                 }
 
@@ -148,11 +191,31 @@ impl<'a> Iterator for AggQuery<'a> {
                 self.completed = true;
 
                 match &self.emit {
-                    Emit::Single(agg) => self.results.push(agg.complete()),
-                    Emit::Grouped(groups) => {
-                        for group in groups.values() {
-                            self.results.push(group.complete());
+                    Emit::Single(agg) => self.results = vec![agg.complete()].into_iter(),
+                    Emit::Grouped { ordered, aggs } => {
+                        let mut results = Vec::new();
+                        if let Some(order) = ordered {
+                            let mut orderer = QueryOrderer::new(*order);
+                            for group in aggs.values() {
+                                let key = if let Some(agg) = &group.ordered {
+                                    agg.agg.complete()
+                                } else {
+                                    QueryValue::Null
+                                };
+                                orderer.insert(key, group.state.complete())
+                            }
+
+                            orderer.prepare_for_streaming()?;
+                            while let Some(value) = orderer.next() {
+                                results.push(value);
+                            }
+                        } else {
+                            for group in aggs.values() {
+                                results.push(group.state.complete());
+                            }
                         }
+
+                        self.results = results.into_iter();
                     }
                 }
 
@@ -163,15 +226,13 @@ impl<'a> Iterator for AggQuery<'a> {
                 return Some(Err(e));
             }
 
-            if let Some(predicate) = &self.query.predicate {
-                match self.interpreter.eval_predicate(&predicate.value) {
-                    Ok(false) => continue,
-                    Ok(true) => {}
-                    Err(e) => return Some(Err(e)),
-                }
+            match self.interpreter.eval_predicate(self.query) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => return Some(Err(e)),
             }
 
-            let agg = if let Emit::Grouped(grouped) = &mut self.emit
+            let agg = if let Emit::Grouped { aggs, .. } = &mut self.emit
                 && let Some(group_by) = &self.query.group_by
             {
                 let group_key = match self.interpreter.eval(&group_by.expr.value) {
@@ -191,9 +252,20 @@ impl<'a> Iterator for AggQuery<'a> {
                     },
                 };
 
-                grouped
-                    .entry(group_key)
-                    .or_insert_with(|| AggState::from(self.interpreter.options(), self.query))
+                let agg_group = aggs.entry(group_key).or_insert_with(|| AggGroup {
+                    ordered: self
+                        .query
+                        .order_by
+                        .as_ref()
+                        .and_then(|o| instantiate_ordered_aggregate(self.options, o)),
+                    state: AggState::from(self.interpreter.options(), self.query),
+                });
+
+                if let Err(e) = agg_group.update_order_agg(&self.interpreter) {
+                    return Some(Err(e));
+                }
+
+                &mut agg_group.state
             } else if let Emit::Single(agg) = &mut self.emit {
                 agg
             } else {

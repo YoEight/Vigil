@@ -1,0 +1,3 @@
+FROM e IN events
+ORDER BY e.data.salary DESC
+PROJECT INTO e.data

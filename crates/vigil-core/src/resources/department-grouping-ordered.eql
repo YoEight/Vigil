@@ -1,0 +1,8 @@
+FROM e IN events
+GROUP BY e.data.department
+ORDER BY AVG(e.data.salary) DESC
+PROJECT INTO {
+	department: UNIQUE(e.data.department),
+	employeeCount: COUNT(),
+	avgSalary: AVG(e.data.salary)
+}

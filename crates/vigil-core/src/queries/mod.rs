@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-
 use crate::{eval::EvalResult, values::QueryValue};
+use std::collections::HashMap;
 
 pub mod aggregates;
 pub mod events;
+mod orderer;
 
 pub type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue>> + 'a>;
 pub type Buffer<'a> = HashMap<&'a str, QueryValue>;

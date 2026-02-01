@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
@@ -17,7 +18,63 @@ pub enum QueryValue {
     Time(NaiveTime),
 }
 
+impl PartialEq for QueryValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Number(a), Self::Number(b)) => a == b,
+            (Self::DateTime(a), Self::DateTime(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+            (Self::Time(a), Self::Time(b)) => a == b,
+            (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::Record(a), Self::Record(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for QueryValue {}
+
+impl PartialOrd for QueryValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for QueryValue {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Null, Self::Null) => Ordering::Equal,
+            (Self::String(a), Self::String(b)) => a.cmp(b),
+            (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
+            (Self::Number(a), Self::Number(b)) => a.total_cmp(b),
+            (Self::DateTime(a), Self::DateTime(b)) => a.cmp(b),
+            (Self::Date(a), Self::Date(b)) => a.cmp(b),
+            (Self::Time(a), Self::Time(b)) => a.cmp(b),
+            (Self::Array(a), Self::Array(b)) => a.cmp(b),
+            (Self::Record(a), Self::Record(b)) => a.cmp(b),
+            _ => self.type_order().cmp(&other.type_order()),
+        }
+    }
+}
+
 impl QueryValue {
+    pub fn type_order(&self) -> u8 {
+        match self {
+            QueryValue::Null => 0,
+            QueryValue::String(_) => 1,
+            QueryValue::Number(_) => 2,
+            QueryValue::Bool(_) => 3,
+            QueryValue::Record(_) => 4,
+            QueryValue::Array(_) => 5,
+            QueryValue::DateTime(_) => 6,
+            QueryValue::Date(_) => 7,
+            QueryValue::Time(_) => 8,
+        }
+    }
+
     #[cfg(test)]
     pub fn as_str_or_panic(&self) -> &str {
         if let Self::String(s) = self {
@@ -27,7 +84,7 @@ impl QueryValue {
         panic!("expected a string but got something else")
     }
 
-    pub fn from(value: serde_json::Value, _tpe: &Type) -> QueryValue {
+    pub fn from(value: serde_json::Value) -> QueryValue {
         match value {
             serde_json::Value::Null => QueryValue::Null,
             serde_json::Value::Bool(b) => QueryValue::Bool(b),
@@ -36,17 +93,14 @@ impl QueryValue {
             }
             serde_json::Value::String(s) => QueryValue::String(s),
             serde_json::Value::Array(values) => {
-                let values = values
-                    .into_iter()
-                    .map(|v| Self::from(v, _tpe))
-                    .collect::<Vec<_>>();
+                let values = values.into_iter().map(Self::from).collect::<Vec<_>>();
 
                 QueryValue::Array(values)
             }
             serde_json::Value::Object(map) => {
                 let mut props = BTreeMap::new();
                 for (name, value) in map {
-                    props.insert(name, Self::from(value, _tpe));
+                    props.insert(name, Self::from(value));
                 }
 
                 QueryValue::Record(props)
@@ -56,7 +110,7 @@ impl QueryValue {
 
     pub fn build_from_type_expectation(value: serde_json::Value, expectation: &Type) -> QueryValue {
         match expectation {
-            Type::Unspecified => Self::from(value, expectation),
+            Type::Unspecified => Self::from(value),
             Type::Number => {
                 if let serde_json::Value::Number(n) = value {
                     QueryValue::Number(n.as_f64().expect("we don't use arbitrary precision"))
@@ -91,18 +145,17 @@ impl QueryValue {
                 }
             }
             Type::Record(map) => {
-                if let serde_json::Value::Object(mut values) = value {
+                if let serde_json::Value::Object(values) = value {
                     let mut props = BTreeMap::new();
 
-                    for (name, tpe) in map.iter() {
-                        let value = if let Some(value) = values.remove(name) {
-                            Self::build_from_type_expectation(value, tpe)
+                    for (prop_name, prop_value) in values {
+                        let prop_value = if let Some(tpe) = map.get(prop_name.as_str()) {
+                            Self::build_from_type_expectation(prop_value, tpe)
                         } else {
-                            QueryValue::Null
+                            Self::from(prop_value)
                         };
 
-                        // TODO - we might just not insert the value if not present, sparing the clone allocation
-                        props.insert(name.clone(), value);
+                        props.insert(prop_name, prop_value);
                     }
 
                     QueryValue::Record(props)
