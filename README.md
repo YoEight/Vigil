@@ -44,7 +44,7 @@ PROJECT INTO {
     count: COUNT(),
     avgSalary: AVG(e.data.salary)
 }
-
+```
 ## License
 
 Apache 2.0
