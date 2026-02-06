@@ -47,7 +47,7 @@ pub struct Event {
 
 impl Event {
     fn project(&self, expected: &Type) -> QueryValue {
-        if let eventql_parser::Type::Record(rec) = expected {
+        if let Type::Record(rec) = expected {
             let mut props = BTreeMap::new();
             for (name, value) in rec.iter() {
                 match name.as_str() {

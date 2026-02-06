@@ -1,0 +1,26 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(&options, &query).collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - Record:
+      avgSalary:
+        Number: 97666.66666666667
+      department:
+        String: engineering
+      employeeCount:
+        Number: 3
+  - Record:
+      avgSalary:
+        Number: 78500
+      department:
+        String: sales
+      employeeCount:
+        Number: 2
+  - Record:
+      avgSalary:
+        Number: 70000
+      department:
+        String: marketing
+      employeeCount:
+        Number: 1
