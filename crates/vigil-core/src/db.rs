@@ -5,15 +5,15 @@ use std::{
 };
 
 use eventql_parser::{
-    Query, Type,
-    prelude::{AnalysisOptions, Typed},
+    prelude::{Type, Typed}, Query,
+    Session,
 };
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    queries::{Row, Sources, aggregates::AggQuery, events::EventQuery},
+    queries::{aggregates::AggQuery, events::EventQuery, Row, Sources},
     values::QueryValue,
 };
 
@@ -46,87 +46,82 @@ pub struct Event {
 }
 
 impl Event {
-    fn project(&self, expected: &Type) -> QueryValue {
+    fn project(&self, session: &Session, expected: Type) -> QueryValue {
         if let Type::Record(rec) = expected {
             let mut props = BTreeMap::new();
-            for (name, value) in rec.iter() {
+            for (name, value) in session.arena().get_type_rec(rec) {
+                let name = session.arena().get_str(*name).to_owned();
                 match name.as_str() {
                     "spec_version" => match value {
                         Type::String => {
                             props.insert(
-                                name.clone(),
+                                name,
                                 QueryValue::String(self.spec_version.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.clone(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     "id" => match value {
                         Type::String => {
-                            props.insert(name.clone(), QueryValue::String(self.id.to_string()));
+                            props.insert(name, QueryValue::String(self.id.to_string()));
                         }
 
                         _ => {
-                            props.insert(name.clone(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     "source" => match value {
                         Type::String => {
-                            props.insert(name.clone(), QueryValue::String(self.source.clone()));
+                            props.insert(name, QueryValue::String(self.source.clone()));
                         }
 
                         _ => {
-                            props.insert(name.clone(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     "subject" => match value {
                         Type::String | Type::Subject => {
-                            props.insert(
-                                name.clone(),
-                                QueryValue::String(self.subject.as_str().into()),
-                            );
+                            props.insert(name, QueryValue::String(self.subject.as_str().into()));
                         }
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     "type" => match value {
                         Type::String => {
-                            props.insert(
-                                name.clone(),
-                                QueryValue::String(self.event_type.as_str().into()),
-                            );
+                            props.insert(name, QueryValue::String(self.event_type.as_str().into()));
                         }
 
                         _ => {
-                            props.insert(name.clone(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     "datacontenttype" => match value {
                         Type::String => {
                             props.insert(
-                                name.clone(),
+                                name,
                                 QueryValue::String(self.datacontenttype.as_str().into()),
                             );
                         }
 
                         _ => {
-                            props.insert(name.as_str().into(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     "data" => match value {
                         Type::String => {
                             props.insert(
-                                name.clone(),
+                                name,
                                 QueryValue::String(unsafe {
                                     str::from_utf8_unchecked(self.data.as_slice()).into()
                                 }),
@@ -137,26 +132,26 @@ impl Event {
                             "application/json" => {
                                 if let Ok(payload) = serde_json::from_slice(&self.data) {
                                     props.insert(
-                                        name.clone(),
+                                        name,
                                         QueryValue::build_from_type_expectation(payload, value),
                                     );
                                 } else {
-                                    props.insert(name.clone(), QueryValue::Null);
+                                    props.insert(name, QueryValue::Null);
                                 }
                             }
 
                             _ => {
-                                props.insert(name.clone(), QueryValue::Null);
+                                props.insert(name, QueryValue::Null);
                             }
                         },
 
                         _ => {
-                            props.insert(name.clone(), QueryValue::Null);
+                            props.insert(name, QueryValue::Null);
                         }
                     },
 
                     _ => {
-                        props.insert(name.clone(), QueryValue::Null);
+                        props.insert(name, QueryValue::Null);
                     }
                 }
             }
@@ -262,11 +257,22 @@ where
     }
 }
 
-#[derive(Default)]
 pub struct Db {
     types: HashMap<String, Vec<usize>>,
     subjects: Subject,
     events: Vec<Event>,
+    session: Session,
+}
+
+impl Default for Db {
+    fn default() -> Self {
+        Self {
+            types: Default::default(),
+            subjects: Default::default(),
+            events: vec![],
+            session: Session::builder().use_stdlib().build(),
+        }
+    }
 }
 
 impl Db {
@@ -315,12 +321,71 @@ impl Db {
         IndexedEvents::new(subject_events, self.events.as_slice())
     }
 
-    pub fn run_query<'a>(
-        &'a self,
-        options: &'a AnalysisOptions,
-        query: &'a Query<Typed>,
-    ) -> Row<'a> {
-        catalog(self, options, query)
+    pub fn run_query(&mut self, query: &str) -> Result<Row> {
+        let query = self.session.parse(query)?;
+        let query = self.session.run_static_analysis(query)?;
+
+        Ok(self.catalog(query))
+    }
+    fn catalog<'a>(&self, query: Query<Typed>) -> Row {
+        let mut srcs = Sources::default();
+        for query_src in query.sources {
+            match query_src.kind {
+                eventql_parser::SourceKind::Name(name) => {
+                    if self
+                        .session
+                        .arena()
+                        .get_str(name)
+                        .eq_ignore_ascii_case("events")
+                        && let Some(tpe) = query.meta.scope.get(query_src.binding.name)
+                    {
+                        srcs.insert(
+                            query_src.binding.name,
+                            Box::new(
+                                self.events
+                                    .iter()
+                                    .map(|e| Ok(e.project(&self.session, tpe))),
+                            ),
+                        );
+
+                        continue;
+                    }
+
+                    srcs.insert(query_src.binding.name, Box::new(iter::empty()));
+                }
+
+                eventql_parser::SourceKind::Subject(path) => {
+                    if let Some(tpe) = query.meta.scope.get(query_src.binding.name) {
+                        let path = self.session.arena().get_str(path);
+
+                        srcs.insert(
+                            query_src.binding.name,
+                            Box::new(
+                                self.iter_subject(path)
+                                    .map(|e| Ok(e.project(&self.session, tpe))),
+                            ),
+                        );
+
+                        continue;
+                    }
+
+                    srcs.insert(query_src.binding.name, Box::new(iter::empty()));
+                }
+
+                eventql_parser::SourceKind::Subquery(sub_query) => {
+                    let name = query_src.binding.name;
+                    let row = self.catalog(*sub_query);
+
+                    srcs.insert(name, row);
+                }
+            }
+        }
+
+        if query.meta.aggregate {
+            Box::new(AggQuery::new(srcs, &self.session, query))
+        } else {
+            Box::new(EventQuery::new(srcs, &self.session, query))
+        }
     }
 }
 
@@ -341,59 +406,3 @@ impl Db {
 //         now
 //     }
 // }
-
-fn catalog<'a>(db: &'a Db, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Row<'a> {
-    let mut srcs = Sources::default();
-    for query_src in &query.sources {
-        match &query_src.kind {
-            eventql_parser::SourceKind::Name(name) => {
-                if name.eq_ignore_ascii_case("events")
-                    && let Some(tpe) = query
-                        .meta
-                        .scope
-                        .entries
-                        .get(query_src.binding.name.as_str())
-                {
-                    srcs.insert(
-                        &query_src.binding.name,
-                        Box::new(db.events.iter().map(|e| Ok(e.project(tpe)))),
-                    );
-
-                    continue;
-                }
-
-                srcs.insert(&query_src.binding.name, Box::new(iter::empty()));
-            }
-
-            eventql_parser::SourceKind::Subject(path) => {
-                if let Some(tpe) = query
-                    .meta
-                    .scope
-                    .entries
-                    .get(query_src.binding.name.as_str())
-                {
-                    srcs.insert(
-                        &query_src.binding.name,
-                        Box::new(db.iter_subject(path).map(|e| Ok(e.project(tpe)))),
-                    );
-
-                    continue;
-                }
-
-                srcs.insert(&query_src.binding.name, Box::new(iter::empty()));
-            }
-
-            eventql_parser::SourceKind::Subquery(sub_query) => {
-                let row = catalog(db, options, sub_query);
-
-                srcs.insert(&query_src.binding.name, row);
-            }
-        }
-    }
-
-    if query.meta.aggregate {
-        Box::new(AggQuery::new(srcs, options, query))
-    } else {
-        Box::new(EventQuery::new(srcs, options, query))
-    }
-}

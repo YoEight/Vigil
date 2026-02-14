@@ -2,23 +2,23 @@ mod average;
 mod count;
 mod unique;
 
-use case_insensitive_hashmap::CaseInsensitiveHashMap;
-use eventql_parser::{
-    App, Order, Query, Type,
-    prelude::{AnalysisOptions, Typed},
-};
-use std::collections::{BTreeMap, HashMap};
-use std::vec;
-
 use crate::queries::orderer::QueryOrderer;
 use crate::{
     eval::{EvalError, EvalResult, Interpreter},
     queries::{
-        Sources,
         aggregates::{average::AverageAggregate, count::CountAggregate, unique::UniqueAggregate},
+        Sources,
     },
     values::QueryValue,
 };
+use case_insensitive_hashmap::CaseInsensitiveHashMap;
+use eventql_parser::prelude::Expr;
+use eventql_parser::{
+    prelude::{Type, Typed}, App, Order, Query,
+    Session,
+};
+use std::collections::{BTreeMap, HashMap};
+use std::vec;
 
 pub trait Aggregate {
     fn fold(&mut self, params: &[QueryValue]);
@@ -31,28 +31,31 @@ enum AggState {
 }
 
 impl AggState {
-    fn from(options: &AnalysisOptions, query: &Query<Typed>) -> Self {
-        match &query.projection.value {
+    fn from(session: &Session, query: &Query<Typed>) -> Self {
+        match session.arena().get_expr(query.projection).value {
             eventql_parser::Value::Record(fields) => {
                 let mut aggs = CaseInsensitiveHashMap::new();
 
-                for field in fields.iter() {
-                    if let eventql_parser::Value::App(app) = &field.value.value {
+                for field in session.arena().get_rec(fields) {
+                    let field_name = session.arena().get_str(field.name);
+                    if let eventql_parser::Value::App(app) =
+                        session.arena().get_expr(field.expr).value
+                    {
                         aggs.insert(
-                            field.name.clone(),
-                            Self::Single(instantiate_aggregate(options, app)),
+                            field_name,
+                            Self::Single(instantiate_aggregate(session, &app)),
                         );
                         continue;
                     }
 
                     let agg: Box<dyn Aggregate> = Box::new(UniqueAggregate::default());
-                    aggs.insert(field.name.clone(), Self::Single(agg));
+                    aggs.insert(field_name, Self::Single(agg));
                 }
 
                 Self::Record(aggs)
             }
 
-            eventql_parser::Value::App(app) => Self::Single(instantiate_aggregate(options, app)),
+            eventql_parser::Value::App(app) => Self::Single(instantiate_aggregate(session, &app)),
 
             _ => unreachable!("we expect an aggregate expression so this case should never happen"),
         }
@@ -75,25 +78,26 @@ impl AggState {
 }
 
 fn instantiate_ordered_aggregate<'a>(
-    options: &'a AnalysisOptions,
+    session: &'a Session,
     order_by: &'a eventql_parser::OrderBy,
-) -> Option<AggOrdered<'a>> {
-    if let eventql_parser::Value::App(app) = &order_by.expr.value {
+) -> Option<AggOrdered> {
+    let expr = session.arena().get_expr(order_by.expr);
+    if let eventql_parser::Value::App(app) = expr.value {
         Some(AggOrdered {
-            expr: &order_by.expr,
-            agg: AggState::Single(instantiate_aggregate(options, app)),
+            expr,
+            agg: AggState::Single(instantiate_aggregate(session, &app)),
         })
     } else {
         None
     }
 }
 
-fn instantiate_aggregate(options: &AnalysisOptions, app: &App) -> Box<dyn Aggregate> {
+fn instantiate_aggregate(session: &Session, app: &App) -> Box<dyn Aggregate> {
     if let Type::App {
         aggregate: true, ..
-    } = options
-        .default_scope
-        .entries
+    } = session
+        .arena()
+        .get_type(app.func)
         .get(app.func.as_str())
         .expect("func to be defined")
     {
@@ -111,61 +115,61 @@ fn instantiate_aggregate(options: &AnalysisOptions, app: &App) -> Box<dyn Aggreg
     panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
 }
 
-enum Emit<'a> {
+enum Emit {
     Single(AggState),
     Grouped {
         ordered: Option<Order>,
-        aggs: HashMap<String, AggGroup<'a>>,
+        aggs: HashMap<String, AggGroup>,
     },
 }
 
-struct AggGroup<'a> {
-    ordered: Option<AggOrdered<'a>>,
+struct AggGroup {
+    ordered: Option<AggOrdered>,
     state: AggState,
 }
 
-impl<'a> AggGroup<'a> {
+impl AggGroup {
     fn update_order_agg(&mut self, interpreter: &Interpreter) -> EvalResult<()> {
         if let Some(agg) = &mut self.ordered {
-            eval_agg_value(interpreter, &agg.expr.value, &mut agg.agg)?;
+            eval_agg_value(interpreter, agg.expr.value, &mut agg.agg)?;
         }
 
         Ok(())
     }
 }
 
-struct AggOrdered<'a> {
-    expr: &'a eventql_parser::Expr,
+struct AggOrdered {
+    expr: Expr,
     agg: AggState,
 }
 
 pub struct AggQuery<'a> {
-    srcs: Sources<'a>,
+    srcs: Sources,
     interpreter: Interpreter<'a>,
-    query: &'a Query<Typed>,
-    emit: Emit<'a>,
+    query: Query<Typed>,
+    emit: Emit,
     completed: bool,
-    options: &'a AnalysisOptions,
+    session: &'a Session,
     results: vec::IntoIter<QueryValue>,
 }
 
 impl<'a> AggQuery<'a> {
-    pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
+    pub fn new(srcs: Sources, session: &'a Session, query: Query<Typed>) -> Self {
         let emit = if query.group_by.is_some() {
             Emit::Grouped {
                 ordered: query.order_by.as_ref().map(|o| o.order),
                 aggs: Default::default(),
             }
         } else {
-            Emit::Single(AggState::from(options, query))
+            Emit::Single(AggState::from(session, &query))
         };
 
         Self {
             srcs,
             query,
-            interpreter: Interpreter::new(options),
+            interpreter: Interpreter::new(session),
             emit,
-            options,
+            session,
             completed: false,
             results: Default::default(),
         }
@@ -226,7 +230,7 @@ impl<'a> Iterator for AggQuery<'a> {
                 return Some(Err(e));
             }
 
-            match self.interpreter.eval_predicate(self.query) {
+            match self.interpreter.eval_predicate(&self.query) {
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(e) => return Some(Err(e)),
@@ -235,7 +239,10 @@ impl<'a> Iterator for AggQuery<'a> {
             let agg = if let Emit::Grouped { aggs, .. } = &mut self.emit
                 && let Some(group_by) = &self.query.group_by
             {
-                let group_key = match self.interpreter.eval(&group_by.expr.value) {
+                let group_key = match self
+                    .interpreter
+                    .eval(self.session.arena().get_expr(group_by.expr).value)
+                {
                     Err(e) => return Some(Err(e)),
                     Ok(value) => match value {
                         QueryValue::String(s) => s.clone(),
@@ -257,8 +264,8 @@ impl<'a> Iterator for AggQuery<'a> {
                         .query
                         .order_by
                         .as_ref()
-                        .and_then(|o| instantiate_ordered_aggregate(self.options, o)),
-                    state: AggState::from(self.interpreter.options(), self.query),
+                        .and_then(|o| instantiate_ordered_aggregate(self.session, o)),
+                    state: AggState::from(self.session, &self.query),
                 });
 
                 if let Err(e) = agg_group.update_order_agg(&self.interpreter) {
@@ -274,7 +281,8 @@ impl<'a> Iterator for AggQuery<'a> {
                 )));
             };
 
-            if let Err(e) = eval_agg_value(&self.interpreter, &self.query.projection.value, agg) {
+            let proj_expr = self.session.arena().get_expr(self.query.projection);
+            if let Err(e) = eval_agg_value(&self.interpreter, proj_expr.value, agg) {
                 return Some(Err(e));
             }
         }
@@ -283,15 +291,16 @@ impl<'a> Iterator for AggQuery<'a> {
 
 fn eval_agg_value(
     interpreter: &Interpreter,
-    value: &eventql_parser::Value,
+    value: eventql_parser::Value,
     state: &mut AggState,
 ) -> EvalResult<()> {
     match (state, value) {
         (AggState::Single(agg), eventql_parser::Value::App(app)) => {
-            let mut args = Vec::with_capacity(app.args.len());
+            let fn_args = interpreter.session.arena().get_vec(app.args);
+            let mut args = Vec::with_capacity(fn_args.len());
 
-            for arg in &app.args {
-                args.push(interpreter.eval(&arg.value)?);
+            for arg in fn_args {
+                args.push(interpreter.eval(interpreter.session.arena().get_expr(*arg).value)?);
             }
 
             agg.fold(args.as_slice());
@@ -308,9 +317,13 @@ fn eval_agg_value(
         }
 
         (AggState::Record(aggs), eventql_parser::Value::Record(props)) => {
-            for prop in props {
-                if let Some(agg) = aggs.get_mut(prop.name.as_str()) {
-                    eval_agg_value(interpreter, &prop.value.value, agg)?;
+            for prop in interpreter.session.arena().get_rec(props) {
+                if let Some(agg) = aggs.get_mut(interpreter.session.arena().get_str(prop.name)) {
+                    eval_agg_value(
+                        interpreter,
+                        interpreter.session.arena().get_expr(prop.expr).value,
+                        agg,
+                    )?;
                     continue;
                 }
 

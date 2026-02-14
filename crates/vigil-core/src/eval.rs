@@ -6,8 +6,8 @@ use std::{
 };
 
 use chrono::{Datelike, Timelike, Utc};
-use eventql_parser::Query;
-use eventql_parser::prelude::{AnalysisOptions, Operator, Typed};
+use eventql_parser::prelude::{Operator, Typed};
+use eventql_parser::{Query, Session, StrRef};
 use rand::Rng;
 use serde::Serialize;
 use thiserror::Error;
@@ -35,32 +35,28 @@ impl QueryValue {
 }
 
 pub struct Interpreter<'a> {
-    options: &'a AnalysisOptions,
-    env: HashMap<&'a str, QueryValue>,
+    pub(crate) session: &'a Session,
+    env: HashMap<StrRef, QueryValue>,
 }
 
 impl<'a> Interpreter<'a> {
-    pub fn new(options: &'a AnalysisOptions) -> Self {
+    pub fn new(session: &'a Session) -> Self {
         Self {
-            options,
+            session,
             env: Default::default(),
         }
     }
 
-    pub fn options(&self) -> &'a AnalysisOptions {
-        self.options
-    }
-
-    pub fn env_mut(&mut self) -> &mut HashMap<&'a str, QueryValue> {
+    pub fn env_mut(&mut self) -> &mut HashMap<StrRef, QueryValue> {
         self.env.clear();
         &mut self.env
     }
 
-    fn lookup(&self, id: &'a str) -> EvalResult<QueryValue> {
-        self.env
-            .get(id)
-            .cloned()
-            .ok_or_else(|| EvalError::Runtime(format!("undefined identifier: {}", id).into()))
+    fn lookup(&self, id: StrRef) -> EvalResult<QueryValue> {
+        self.env.get(&id).cloned().ok_or_else(|| {
+            let ident = self.session.arena().get_str(id);
+            EvalError::Runtime(format!("undefined identifier: {ident}").into())
+        })
     }
 
     fn coerce(&self, value: &QueryValue, tpe: eventql_parser::Type) -> EvalResult<QueryValue> {
@@ -72,7 +68,11 @@ impl<'a> Interpreter<'a> {
                     Ok(QueryValue::String(cow.clone()))
                 }
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert String to {tpe}").into(),
+                    format!(
+                        "cannot convert String to {}",
+                        self.session.display_type(&tpe)
+                    )
+                    .into(),
                 )),
             },
 
@@ -80,7 +80,11 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::Number => Ok(QueryValue::Number(*n)),
                 eventql_parser::Type::String => Ok(QueryValue::String(n.to_string())),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Number to {tpe}").into(),
+                    format!(
+                        "cannot convert Number to {}",
+                        self.session.display_type(&tpe)
+                    )
+                    .into(),
                 )),
             },
 
@@ -88,7 +92,7 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::String => Ok(QueryValue::String(b.to_string())),
                 eventql_parser::Type::Bool => Ok(QueryValue::Bool(*b)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Bool to {tpe}").into(),
+                    format!("cannot convert Bool to {}", self.session.display_type(&tpe)).into(),
                 )),
             },
 
@@ -101,7 +105,11 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::Time => Ok(QueryValue::Time(date_time.time())),
                 eventql_parser::Type::DateTime => Ok(QueryValue::DateTime(*date_time)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert DateTime to {tpe}").into(),
+                    format!(
+                        "cannot convert DateTime to {}",
+                        self.session.display_type(&tpe)
+                    )
+                    .into(),
                 )),
             },
 
@@ -109,7 +117,7 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::String => Ok(QueryValue::String(naive_date.to_string())),
                 eventql_parser::Type::Date => Ok(QueryValue::Date(*naive_date)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Date to {tpe}").into(),
+                    format!("cannot convert Date to {}", self.session.display_type(&tpe)).into(),
                 )),
             },
 
@@ -117,7 +125,7 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::String => Ok(QueryValue::String(naive_time.to_string())),
                 eventql_parser::Type::Time => Ok(QueryValue::Time(*naive_time)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Time to {tpe}").into(),
+                    format!("cannot convert Time to {}", self.session.display_type(&tpe)).into(),
                 )),
             },
         }
@@ -144,11 +152,7 @@ impl<'a> Interpreter<'a> {
                 Operator::Sub => Ok(QueryValue::Number(a - b)),
                 Operator::Mul => Ok(QueryValue::Number(a * b)),
                 Operator::Div => Ok(QueryValue::Number(a / b)),
-                Operator::Eq => Ok(QueryValue::Bool(
-                    a.partial_cmp(b)
-                        .map(|o| matches!(o, Ordering::Equal))
-                        .unwrap_or_default(),
-                )),
+                Operator::Eq => Ok(QueryValue::Bool(a == b)),
                 Operator::Neq => Ok(QueryValue::Bool(
                     a.partial_cmp(b)
                         .map(|o| !matches!(o, Ordering::Equal))
@@ -277,58 +281,71 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn eval_predicate(&self, query: &'a Query<Typed>) -> EvalResult<bool> {
-        if let Some(predicate) = &query.predicate {
-            return self.eval(&predicate.value)?.as_bool();
+    pub fn eval_predicate(&self, query: &Query<Typed>) -> EvalResult<bool> {
+        if let Some(predicate) = query.predicate.as_ref().copied() {
+            return self
+                .eval(self.session.arena().get_expr(predicate).value)?
+                .as_bool();
         }
 
         Ok(true)
     }
 
-    pub fn eval(&self, value: &'a eventql_parser::Value) -> EvalResult<QueryValue> {
+    pub fn eval(&self, value: eventql_parser::Value) -> EvalResult<QueryValue> {
         match value {
-            eventql_parser::Value::Number(n) => Ok(QueryValue::Number(*n)),
-            eventql_parser::Value::String(s) => Ok(QueryValue::String(s.clone())),
-            eventql_parser::Value::Bool(b) => Ok(QueryValue::Bool(*b)),
-            eventql_parser::Value::Id(id) => self.lookup(id.as_str()),
+            eventql_parser::Value::Number(n) => Ok(QueryValue::Number(n)),
+            eventql_parser::Value::String(s) => Ok(QueryValue::String(
+                self.session.arena().get_str(s).to_owned(),
+            )),
+            eventql_parser::Value::Bool(b) => Ok(QueryValue::Bool(b)),
+            eventql_parser::Value::Id(id) => self.lookup(id),
             eventql_parser::Value::Array(exprs) => {
-                let mut arr = Vec::with_capacity(exprs.capacity());
+                let exprs = self.session.arena().get_vec(exprs);
+                let mut arr = Vec::with_capacity(exprs.len());
 
                 for expr in exprs {
-                    arr.push(self.eval(&expr.value)?);
+                    arr.push(self.eval(self.session.arena().get_expr(*expr).value)?);
                 }
 
                 Ok(QueryValue::Array(arr))
             }
 
             eventql_parser::Value::Record(fields) => {
+                let fields = self.session.arena().get_rec(fields);
                 let mut record = BTreeMap::new();
 
                 for field in fields {
-                    record.insert(field.name.clone(), self.eval(&field.value.value)?);
+                    record.insert(
+                        self.session.arena().get_str(field.name).to_owned(),
+                        self.eval(self.session.arena().get_expr(field.expr).value)?,
+                    );
                 }
 
                 Ok(QueryValue::Record(record))
             }
 
-            eventql_parser::Value::Access(access) => match self.eval(&access.target.value)? {
-                QueryValue::Record(rec) => Ok(rec
-                    .get(access.field.as_str())
-                    .cloned()
-                    .unwrap_or(QueryValue::Null)),
+            eventql_parser::Value::Access(access) => {
+                match self.eval(self.session.arena().get_expr(access.target).value)? {
+                    QueryValue::Record(rec) => Ok(rec
+                        .get(self.session.arena().get_str(access.field))
+                        .cloned()
+                        .unwrap_or(QueryValue::Null)),
 
-                _ => Err(EvalError::Runtime(
-                    "expected a record for field access".into(),
-                )),
-            },
+                    _ => Err(EvalError::Runtime(
+                        "expected a record for field access".into(),
+                    )),
+                }
+            }
 
             eventql_parser::Value::App(app) => {
-                let mut args = Vec::with_capacity(app.args.capacity());
+                let fun_args = self.session.arena().get_vec(app.args);
+                let mut args = Vec::with_capacity(fun_args.len());
 
-                for arg in &app.args {
-                    args.push(self.eval(&arg.value)?);
+                for arg in fun_args {
+                    args.push(self.eval(self.session.arena().get_expr(*arg).value)?);
                 }
 
+                let fun_name = self.session.arena().get_str(app.func);
                 // -------------
                 // Math functions
                 // ------------
@@ -571,31 +588,35 @@ impl<'a> Interpreter<'a> {
                 }
 
                 Err(EvalError::Runtime(
-                    format!("unknown function or invalid arguments: {}", app.func).into(),
+                    format!("unknown function or invalid arguments: {fun_name}").into(),
                 ))
             }
 
             eventql_parser::Value::Binary(binary) => {
-                let lhs = self.eval(&binary.lhs.value)?;
+                let lhs = self.eval(self.session.arena().get_expr(binary.lhs).value)?;
 
                 if let Operator::As = binary.operator
-                    && let eventql_parser::Value::Id(tpe) = &binary.rhs.value
+                    && let eventql_parser::Value::Id(tpe_name) =
+                        self.session.arena().get_expr(binary.rhs).value
                 {
-                    let tpe = eventql_parser::prelude::name_to_type(self.options, tpe).ok_or_else(
-                        || EvalError::Runtime(format!("unknown type: {}", tpe).into()),
-                    )?;
+                    let tpe_name = self.session.arena().get_str(tpe_name);
+                    let tpe = self.session.get_type_from_name(tpe_name).ok_or_else(|| {
+                        EvalError::Runtime(format!("unknown type: {tpe_name}").into())
+                    })?;
 
                     return self.coerce(&lhs, tpe);
                 }
 
-                let rhs = self.eval(&binary.rhs.value)?;
+                let rhs = self.eval(self.session.arena().get_expr(binary.rhs).value)?;
 
                 self.eval_binary(binary.operator, &lhs, &rhs)
             }
 
             eventql_parser::Value::Unary(unary) => match unary.operator {
                 Operator::Add => {
-                    if let QueryValue::Number(n) = self.eval(&unary.expr.value)? {
+                    if let QueryValue::Number(n) =
+                        self.eval(self.session.arena().get_expr(unary.expr).value)?
+                    {
                         Ok(QueryValue::Number(n))
                     } else {
                         Err(EvalError::Runtime(
@@ -605,7 +626,9 @@ impl<'a> Interpreter<'a> {
                 }
 
                 Operator::Sub => {
-                    if let QueryValue::Number(n) = self.eval(&unary.expr.value)? {
+                    if let QueryValue::Number(n) =
+                        self.eval(self.session.arena().get_expr(unary.expr).value)?
+                    {
                         Ok(QueryValue::Number(-n))
                     } else {
                         Err(EvalError::Runtime(
@@ -615,7 +638,9 @@ impl<'a> Interpreter<'a> {
                 }
 
                 Operator::Not => {
-                    if let QueryValue::Bool(b) = self.eval(&unary.expr.value)? {
+                    if let QueryValue::Bool(b) =
+                        self.eval(self.session.arena().get_expr(unary.expr).value)?
+                    {
                         Ok(QueryValue::Bool(!b))
                     } else {
                         Err(EvalError::Runtime(
@@ -629,7 +654,9 @@ impl<'a> Interpreter<'a> {
                 )),
             },
 
-            eventql_parser::Value::Group(expr) => self.eval(&expr.value),
+            eventql_parser::Value::Group(expr) => {
+                self.eval(self.session.arena().get_expr(expr).value)
+            }
         }
     }
 }
