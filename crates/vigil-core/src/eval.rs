@@ -70,7 +70,7 @@ impl<'a> Interpreter<'a> {
                 _ => Err(EvalError::Runtime(
                     format!(
                         "cannot convert String to {}",
-                        self.session.display_type(&tpe)
+                        self.session.display_type(tpe)
                     )
                     .into(),
                 )),
@@ -82,7 +82,7 @@ impl<'a> Interpreter<'a> {
                 _ => Err(EvalError::Runtime(
                     format!(
                         "cannot convert Number to {}",
-                        self.session.display_type(&tpe)
+                        self.session.display_type(tpe)
                     )
                     .into(),
                 )),
@@ -92,7 +92,7 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::String => Ok(QueryValue::String(b.to_string())),
                 eventql_parser::Type::Bool => Ok(QueryValue::Bool(*b)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Bool to {}", self.session.display_type(&tpe)).into(),
+                    format!("cannot convert Bool to {}", self.session.display_type(tpe)).into(),
                 )),
             },
 
@@ -107,7 +107,7 @@ impl<'a> Interpreter<'a> {
                 _ => Err(EvalError::Runtime(
                     format!(
                         "cannot convert DateTime to {}",
-                        self.session.display_type(&tpe)
+                        self.session.display_type(tpe)
                     )
                     .into(),
                 )),
@@ -117,7 +117,7 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::String => Ok(QueryValue::String(naive_date.to_string())),
                 eventql_parser::Type::Date => Ok(QueryValue::Date(*naive_date)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Date to {}", self.session.display_type(&tpe)).into(),
+                    format!("cannot convert Date to {}", self.session.display_type(tpe)).into(),
                 )),
             },
 
@@ -125,7 +125,7 @@ impl<'a> Interpreter<'a> {
                 eventql_parser::Type::String => Ok(QueryValue::String(naive_time.to_string())),
                 eventql_parser::Type::Time => Ok(QueryValue::Time(*naive_time)),
                 _ => Err(EvalError::Runtime(
-                    format!("cannot convert Time to {}", self.session.display_type(&tpe)).into(),
+                    format!("cannot convert Time to {}", self.session.display_type(tpe)).into(),
                 )),
             },
         }
@@ -352,139 +352,139 @@ impl<'a> Interpreter<'a> {
                 // Math functions
                 // ------------
 
-                if app.func.eq_ignore_ascii_case("abs")
+                if fun_name.eq_ignore_ascii_case("abs")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.abs()));
+                    return Ok(QueryValue::Number(n.abs().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("ceil")
+                if fun_name.eq_ignore_ascii_case("ceil")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.ceil()));
+                    return Ok(QueryValue::Number(n.ceil().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("floor")
+                if fun_name.eq_ignore_ascii_case("floor")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.floor()));
+                    return Ok(QueryValue::Number(n.floor().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("floor")
+                if fun_name.eq_ignore_ascii_case("floor")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.round()));
+                    return Ok(QueryValue::Number(n.round().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("cos")
+                if fun_name.eq_ignore_ascii_case("cos")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.cos()));
+                    return Ok(QueryValue::Number(n.cos().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("sin")
+                if fun_name.eq_ignore_ascii_case("sin")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.sin()));
+                    return Ok(QueryValue::Number(n.sin().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("tan")
+                if fun_name.eq_ignore_ascii_case("tan")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.tan()));
+                    return Ok(QueryValue::Number(n.tan().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("exp")
+                if fun_name.eq_ignore_ascii_case("exp")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.exp()));
+                    return Ok(QueryValue::Number(n.exp().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("pow")
+                if fun_name.eq_ignore_ascii_case("pow")
                     && let QueryValue::Number(x) = &args[0]
                     && let QueryValue::Number(y) = &args[1]
                 {
-                    return Ok(QueryValue::Number(x.powi(*y as i32)));
+                    return Ok(QueryValue::Number(x.powi(y.0 as i32).into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("sqrt")
+                if fun_name.eq_ignore_ascii_case("sqrt")
                     && let QueryValue::Number(n) = &args[0]
                 {
-                    return Ok(QueryValue::Number(n.sqrt()));
+                    return Ok(QueryValue::Number(n.sqrt().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("rand") {
+                if fun_name.eq_ignore_ascii_case("rand") {
                     let mut rng = rand::rng();
-                    return Ok(QueryValue::Number(rng.random()));
+                    return Ok(QueryValue::Number(rng.random::<f64>().into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("pi") {
-                    return Ok(QueryValue::Number(f64::consts::PI));
+                if fun_name.eq_ignore_ascii_case("pi") {
+                    return Ok(QueryValue::Number(f64::consts::PI.into()));
                 }
 
                 // ------------
                 // String functions
                 // ------------
 
-                if app.func.eq_ignore_ascii_case("lower")
+                if fun_name.eq_ignore_ascii_case("lower")
                     && let QueryValue::String(s) = &args[0]
                 {
                     return Ok(QueryValue::String(s.to_lowercase()));
                 }
 
-                if app.func.eq_ignore_ascii_case("upper")
+                if fun_name.eq_ignore_ascii_case("upper")
                     && let QueryValue::String(s) = &args[0]
                 {
                     return Ok(QueryValue::String(s.to_uppercase()));
                 }
 
-                if app.func.eq_ignore_ascii_case("trim")
+                if fun_name.eq_ignore_ascii_case("trim")
                     && let QueryValue::String(s) = &args[0]
                 {
                     return Ok(QueryValue::String(s.trim().to_owned()));
                 }
 
-                if app.func.eq_ignore_ascii_case("ltrim")
+                if fun_name.eq_ignore_ascii_case("ltrim")
                     && let QueryValue::String(s) = &args[0]
                 {
                     return Ok(QueryValue::String(s.trim_start().to_owned()));
                 }
 
-                if app.func.eq_ignore_ascii_case("rtrim")
+                if fun_name.eq_ignore_ascii_case("rtrim")
                     && let QueryValue::String(s) = &args[0]
                 {
                     return Ok(QueryValue::String(s.trim_end().to_owned()));
                 }
 
-                if app.func.eq_ignore_ascii_case("len")
+                if fun_name.eq_ignore_ascii_case("len")
                     && let QueryValue::String(s) = &args[0]
                 {
-                    return Ok(QueryValue::Number(s.len() as f64));
+                    return Ok(QueryValue::Number((s.len() as f64).into()));
                 }
 
-                if app.func.eq_ignore_ascii_case("instr")
+                if fun_name.eq_ignore_ascii_case("instr")
                     && let QueryValue::String(x) = &args[0]
                     && let QueryValue::String(y) = &args[1]
                 {
                     return Ok(QueryValue::Number(
-                        x.find(y).map(|i| i + 1).unwrap_or_default() as f64,
+                        (x.find(y).map(|i| i + 1).unwrap_or_default() as f64).into(),
                     ));
                 }
 
-                if app.func.eq_ignore_ascii_case("substring")
+                if fun_name.eq_ignore_ascii_case("substring")
                     && let QueryValue::String(s) = &args[0]
                     && let QueryValue::Number(start) = &args[1]
                     && let QueryValue::Number(length) = &args[2]
                 {
-                    let start = *start as usize;
-                    let length = *length as usize;
+                    let start = start.0 as usize;
+                    let length = length.0 as usize;
 
                     return Ok(QueryValue::String(
                         s.chars().skip(start).take(length).collect(),
                     ));
                 }
 
-                if app.func.eq_ignore_ascii_case("replace")
+                if fun_name.eq_ignore_ascii_case("replace")
                     && let QueryValue::String(x) = &args[0]
                     && let QueryValue::String(y) = &args[1]
                     && let QueryValue::String(z) = &args[2]
@@ -492,14 +492,14 @@ impl<'a> Interpreter<'a> {
                     return Ok(QueryValue::String(x.replace(y, z)));
                 }
 
-                if app.func.eq_ignore_ascii_case("startswith")
+                if fun_name.eq_ignore_ascii_case("startswith")
                     && let QueryValue::String(x) = &args[0]
                     && let QueryValue::String(y) = &args[1]
                 {
                     return Ok(QueryValue::Bool(x.starts_with(y)));
                 }
 
-                if app.func.eq_ignore_ascii_case("endswith")
+                if fun_name.eq_ignore_ascii_case("endswith")
                     && let QueryValue::String(x) = &args[0]
                     && let QueryValue::String(y) = &args[1]
                 {
@@ -510,68 +510,72 @@ impl<'a> Interpreter<'a> {
                 // Date and Time functions
                 // -------------
 
-                if app.func.eq_ignore_ascii_case("now") {
+                if fun_name.eq_ignore_ascii_case("now") {
                     return Ok(QueryValue::DateTime(Utc::now()));
                 }
 
-                if app.func.eq_ignore_ascii_case("year") {
+                if fun_name.eq_ignore_ascii_case("year") {
                     return match &args[0] {
-                        QueryValue::DateTime(t) => Ok(QueryValue::Number(t.year() as f64)),
-                        QueryValue::Date(d) => Ok(QueryValue::Number(d.year() as f64)),
+                        QueryValue::DateTime(t) => Ok(QueryValue::Number((t.year() as f64).into())),
+                        QueryValue::Date(d) => Ok(QueryValue::Number((d.year() as f64).into())),
                         _ => Err(EvalError::Runtime(
                             "year() requires a DateTime or Date argument".into(),
                         )),
                     };
                 }
 
-                if app.func.eq_ignore_ascii_case("month") {
+                if fun_name.eq_ignore_ascii_case("month") {
                     return match &args[0] {
-                        QueryValue::DateTime(t) => Ok(QueryValue::Number(t.month() as f64)),
-                        QueryValue::Date(d) => Ok(QueryValue::Number(d.month() as f64)),
+                        QueryValue::DateTime(t) => {
+                            Ok(QueryValue::Number((t.month() as f64).into()))
+                        }
+                        QueryValue::Date(d) => Ok(QueryValue::Number((d.month() as f64).into())),
                         _ => Err(EvalError::Runtime(
                             "month() requires a DateTime or Date argument".into(),
                         )),
                     };
                 }
 
-                if app.func.eq_ignore_ascii_case("day") {
+                if fun_name.eq_ignore_ascii_case("day") {
                     return match &args[0] {
-                        QueryValue::DateTime(t) => Ok(QueryValue::Number(t.day() as f64)),
-                        QueryValue::Date(d) => Ok(QueryValue::Number(d.day() as f64)),
+                        QueryValue::DateTime(t) => Ok(QueryValue::Number((t.day() as f64).into())),
+                        QueryValue::Date(d) => Ok(QueryValue::Number((d.day() as f64).into())),
                         _ => Err(EvalError::Runtime(
                             "day() requires a DateTime or Date argument".into(),
                         )),
                     };
                 }
 
-                if app.func.eq_ignore_ascii_case("hour") {
+                if fun_name.eq_ignore_ascii_case("hour") {
                     return match &args[0] {
-                        QueryValue::DateTime(t) => Ok(QueryValue::Number(t.hour() as f64)),
-                        QueryValue::Time(t) => Ok(QueryValue::Number(t.hour() as f64)),
+                        QueryValue::DateTime(t) => Ok(QueryValue::Number((t.hour() as f64).into())),
+                        QueryValue::Time(t) => Ok(QueryValue::Number((t.hour() as f64).into())),
                         _ => Err(EvalError::Runtime(
                             "hour() requires a DateTime or Time argument".into(),
                         )),
                     };
                 }
 
-                if app.func.eq_ignore_ascii_case("minute") {
+                if fun_name.eq_ignore_ascii_case("minute") {
                     return match &args[0] {
-                        QueryValue::DateTime(t) => Ok(QueryValue::Number(t.minute() as f64)),
-                        QueryValue::Time(t) => Ok(QueryValue::Number(t.minute() as f64)),
+                        QueryValue::DateTime(t) => {
+                            Ok(QueryValue::Number((t.minute() as f64).into()))
+                        }
+                        QueryValue::Time(t) => Ok(QueryValue::Number((t.minute() as f64).into())),
                         _ => Err(EvalError::Runtime(
                             "minute() requires a DateTime or Time argument".into(),
                         )),
                     };
                 }
 
-                if app.func.eq_ignore_ascii_case("weekday") {
+                if fun_name.eq_ignore_ascii_case("weekday") {
                     return match &args[0] {
-                        QueryValue::DateTime(t) => {
-                            Ok(QueryValue::Number(t.weekday().num_days_from_sunday() as f64))
-                        }
-                        QueryValue::Date(d) => {
-                            Ok(QueryValue::Number(d.weekday().num_days_from_sunday() as f64))
-                        }
+                        QueryValue::DateTime(t) => Ok(QueryValue::Number(
+                            (t.weekday().num_days_from_sunday() as f64).into(),
+                        )),
+                        QueryValue::Date(d) => Ok(QueryValue::Number(
+                            (d.weekday().num_days_from_sunday() as f64).into(),
+                        )),
                         _ => Err(EvalError::Runtime(
                             "weekday() requires a DateTime or Date argument".into(),
                         )),
@@ -582,7 +586,7 @@ impl<'a> Interpreter<'a> {
                 // Conditional functions
                 // --------------
 
-                if app.func.eq_ignore_ascii_case("if")
+                if fun_name.eq_ignore_ascii_case("if")
                     && let QueryValue::Bool(b) = args[0]
                 {
                     // TODO - cloning is not necessary here as we could evaluate args lazily but that'll do for now
@@ -602,7 +606,7 @@ impl<'a> Interpreter<'a> {
                         self.session.arena().get_expr(binary.rhs).value
                 {
                     let tpe_name = self.session.arena().get_str(tpe_name);
-                    let tpe = self.session.get_type_from_name(tpe_name).ok_or_else(|| {
+                    let tpe = self.session.resolve_type(tpe_name).ok_or_else(|| {
                         EvalError::Runtime(format!("unknown type: {tpe_name}").into())
                     })?;
 

@@ -110,9 +110,9 @@ dependencies = [
 
 [[package]]
 name = "eventql-parser"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e14e56794e17c5649169d842d64ddf3d1b6fedd71e313edfe2f2e9c433ae6db2"
+checksum = "7713147240349c11c77c79e5f47cedea64e2ab214fae0ee80c392f293ee66f95"
 dependencies = [
  "nom",
  "nom_locate",
