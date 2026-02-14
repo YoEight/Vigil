@@ -164,8 +164,8 @@ impl QueryValue {
                     let mut props = BTreeMap::new();
 
                     for (prop_name, prop_value) in values {
-                        let prop_value = if let Some(tpe) = map.get(prop_name.as_str()) {
-                            Self::build_from_type_expectation(prop_value, tpe)
+                        let prop_value = if let Some(tpe) = map.get(prop_name.as_str()).copied() {
+                            Self::build_from_type_expectation(session, prop_value, tpe)
                         } else {
                             Self::from(prop_value)
                         };

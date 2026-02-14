@@ -34,7 +34,7 @@ impl From<eventql_parser::prelude::Error> for Error {
 
 pub type Result<A> = std::result::Result<A, Error>;
 
-#[derive(Default, Serialize)]
+#[derive(Default, Clone, Serialize)]
 pub struct Event {
     pub spec_version: String,
     pub id: Uuid,
@@ -133,7 +133,9 @@ impl Event {
                                 if let Ok(payload) = serde_json::from_slice(&self.data) {
                                     props.insert(
                                         name,
-                                        QueryValue::build_from_type_expectation(payload, value),
+                                        QueryValue::build_from_type_expectation(
+                                            session, payload, *value,
+                                        ),
                                     );
                                 } else {
                                     props.insert(name, QueryValue::Null);
@@ -343,7 +345,8 @@ impl Db {
                             query_src.binding.name,
                             Box::new(
                                 self.events
-                                    .iter()
+                                    .clone()
+                                    .into_iter()
                                     .map(|e| Ok(e.project(&self.session, tpe))),
                             ),
                         );

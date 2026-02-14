@@ -21,6 +21,6 @@ impl Aggregate for CountAggregate {
     }
 
     fn complete(&self) -> QueryValue {
-        QueryValue::Number(self.value as f64)
+        QueryValue::Number((self.value as f64).into())
     }
 }

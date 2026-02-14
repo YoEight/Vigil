@@ -283,12 +283,14 @@ impl<'a> Interpreter<'a> {
 
     pub fn eval_predicate(&self, query: &Query<Typed>) -> EvalResult<bool> {
         if let Some(predicate) = query.predicate.as_ref().copied() {
-            return self
-                .eval(self.session.arena().get_expr(predicate).value)?
-                .as_bool();
+            return self.eval_expr(predicate)?.as_bool();
         }
 
         Ok(true)
+    }
+
+    pub fn eval_expr(&self, expr: eventql_parser::ExprRef) -> EvalResult<QueryValue> {
+        self.eval(self.session.arena().get_expr(expr).value)
     }
 
     pub fn eval(&self, value: eventql_parser::Value) -> EvalResult<QueryValue> {

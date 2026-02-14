@@ -1,7 +1,4 @@
-use eventql_parser::{
-    Order, Query,
-    prelude::{AnalysisOptions, Typed},
-};
+use eventql_parser::{prelude::Typed, Order, Query, Session};
 
 use crate::queries::orderer::QueryOrderer;
 use crate::{
@@ -11,25 +8,26 @@ use crate::{
 };
 
 pub struct EventQuery<'a> {
-    srcs: Sources<'a>,
-    query: &'a Query<Typed>,
+    srcs: Sources,
+    query: Query<Typed>,
+    session: &'a Session,
     interpreter: Interpreter<'a>,
     orderer: QueryOrderer,
     completed: bool,
 }
 
 impl<'a> EventQuery<'a> {
-    pub fn new(srcs: Sources<'a>, options: &'a AnalysisOptions, query: &'a Query<Typed>) -> Self {
+    pub fn new(srcs: Sources, session: &'a Session, query: Query<Typed>) -> Self {
+        let order = query
+            .order_by
+            .clone()
+            .map_or_else(|| Order::Asc, |o| o.order);
         Self {
             srcs,
             query,
-            orderer: QueryOrderer::new(
-                query
-                    .order_by
-                    .as_ref()
-                    .map_or_else(|| Order::Asc, |o| o.order),
-            ),
-            interpreter: Interpreter::new(options),
+            session,
+            orderer: QueryOrderer::new(order),
+            interpreter: Interpreter::new(session),
             completed: false,
         }
     }
@@ -56,19 +54,19 @@ impl<'a> Iterator for EventQuery<'a> {
                 continue;
             }
 
-            match self.interpreter.eval_predicate(self.query) {
+            match self.interpreter.eval_predicate(&self.query) {
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(e) => return Some(Err(e)),
             }
 
             if let Some(order_by) = &self.query.order_by {
-                let key = match self.interpreter.eval(&order_by.expr.value) {
+                let key = match self.interpreter.eval_expr(order_by.expr) {
                     Err(e) => return Some(Err(e)),
                     Ok(key) => key,
                 };
 
-                let value = match self.interpreter.eval(&self.query.projection.value) {
+                let value = match self.interpreter.eval_expr(self.query.projection) {
                     Err(e) => return Some(Err(e)),
                     Ok(v) => v,
                 };
@@ -77,7 +75,7 @@ impl<'a> Iterator for EventQuery<'a> {
                 continue;
             }
 
-            return Some(self.interpreter.eval(&self.query.projection.value));
+            return Some(self.interpreter.eval_expr(self.query.projection));
         }
     }
 }
