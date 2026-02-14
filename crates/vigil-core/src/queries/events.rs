@@ -1,4 +1,4 @@
-use eventql_parser::{prelude::Typed, Order, Query, Session};
+use eventql_parser::{Order, Query, Session, prelude::Typed};
 
 use crate::queries::orderer::QueryOrderer;
 use crate::{
@@ -8,24 +8,19 @@ use crate::{
 };
 
 pub struct EventQuery<'a> {
-    srcs: Sources,
+    srcs: Sources<'a>,
     query: Query<Typed>,
-    session: &'a Session,
     interpreter: Interpreter<'a>,
     orderer: QueryOrderer,
     completed: bool,
 }
 
 impl<'a> EventQuery<'a> {
-    pub fn new(srcs: Sources, session: &'a Session, query: Query<Typed>) -> Self {
-        let order = query
-            .order_by
-            .clone()
-            .map_or_else(|| Order::Asc, |o| o.order);
+    pub fn new(srcs: Sources<'a>, session: &'a Session, query: Query<Typed>) -> Self {
+        let order = query.order_by.map_or_else(|| Order::Asc, |o| o.order);
         Self {
             srcs,
             query,
-            session,
             orderer: QueryOrderer::new(order),
             interpreter: Interpreter::new(session),
             completed: false,

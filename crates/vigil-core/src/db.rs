@@ -5,15 +5,15 @@ use std::{
 };
 
 use eventql_parser::{
-    prelude::{Type, Typed}, Query,
-    Session,
+    Query, Session,
+    prelude::{Type, Typed},
 };
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    queries::{aggregates::AggQuery, events::EventQuery, Row, Sources},
+    queries::{Row, Sources, aggregates::AggQuery, events::EventQuery},
     values::QueryValue,
 };
 
@@ -323,21 +323,21 @@ impl Db {
         IndexedEvents::new(subject_events, self.events.as_slice())
     }
 
-    pub fn run_query(&mut self, query: &str) -> Result<Row> {
+    pub fn run_query<'a>(&'a mut self, query: &str) -> Result<Row<'a>> {
         let query = self.session.parse(query)?;
         let query = self.session.run_static_analysis(query)?;
 
         Ok(self.catalog(query))
     }
-    fn catalog<'a>(&self, query: Query<Typed>) -> Row {
+    fn catalog<'a>(&'a self, query: Query<Typed>) -> Row<'a> {
         let mut srcs = Sources::default();
-        for query_src in query.sources {
-            match query_src.kind {
+        for query_src in &query.sources {
+            match &query_src.kind {
                 eventql_parser::SourceKind::Name(name) => {
                     if self
                         .session
                         .arena()
-                        .get_str(name)
+                        .get_str(*name)
                         .eq_ignore_ascii_case("events")
                         && let Some(tpe) = query.meta.scope.get(query_src.binding.name)
                     {
@@ -345,9 +345,8 @@ impl Db {
                             query_src.binding.name,
                             Box::new(
                                 self.events
-                                    .clone()
-                                    .into_iter()
-                                    .map(|e| Ok(e.project(&self.session, tpe))),
+                                    .iter()
+                                    .map(move |e| Ok(e.project(&self.session, tpe))),
                             ),
                         );
 
@@ -359,13 +358,13 @@ impl Db {
 
                 eventql_parser::SourceKind::Subject(path) => {
                     if let Some(tpe) = query.meta.scope.get(query_src.binding.name) {
-                        let path = self.session.arena().get_str(path);
+                        let path = self.session.arena().get_str(*path);
 
                         srcs.insert(
                             query_src.binding.name,
                             Box::new(
                                 self.iter_subject(path)
-                                    .map(|e| Ok(e.project(&self.session, tpe))),
+                                    .map(move |e| Ok(e.project(&self.session, tpe))),
                             ),
                         );
 
@@ -377,7 +376,8 @@ impl Db {
 
                 eventql_parser::SourceKind::Subquery(sub_query) => {
                     let name = query_src.binding.name;
-                    let row = self.catalog(*sub_query);
+                    // TODO - get rid of that unnecessary clone
+                    let row = self.catalog(sub_query.as_ref().clone());
 
                     srcs.insert(name, row);
                 }

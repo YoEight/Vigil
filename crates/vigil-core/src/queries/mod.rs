@@ -6,20 +6,20 @@ pub mod aggregates;
 pub mod events;
 mod orderer;
 
-pub type Row = Box<dyn Iterator<Item = EvalResult<QueryValue>>>;
+pub type Row<'a> = Box<dyn Iterator<Item = EvalResult<QueryValue>> + 'a>;
 pub type Buffer = HashMap<StrRef, QueryValue>;
 
 #[derive(Default)]
-pub struct Sources {
-    inner: HashMap<StrRef, Row>,
+pub struct Sources<'a> {
+    inner: HashMap<StrRef, Row<'a>>,
 }
 
-impl Sources {
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&StrRef, &mut Row)> {
+impl<'a> Sources<'a> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&StrRef, &mut Row<'a>)> {
         self.inner.iter_mut()
     }
 
-    pub fn insert(&mut self, key: StrRef, row: Row) {
+    pub fn insert(&mut self, key: StrRef, row: Row<'a>) {
         self.inner.insert(key, row);
     }
 

@@ -6,16 +6,16 @@ use crate::queries::orderer::QueryOrderer;
 use crate::{
     eval::{EvalError, EvalResult, Interpreter},
     queries::{
-        aggregates::{average::AverageAggregate, count::CountAggregate, unique::UniqueAggregate},
         Sources,
+        aggregates::{average::AverageAggregate, count::CountAggregate, unique::UniqueAggregate},
     },
     values::QueryValue,
 };
 use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use eventql_parser::prelude::Expr;
 use eventql_parser::{
-    prelude::{Type, Typed}, App, Order, Query,
-    Session,
+    App, Order, Query, Session,
+    prelude::{Type, Typed},
 };
 use std::collections::{BTreeMap, HashMap};
 use std::vec;
@@ -96,16 +96,16 @@ fn instantiate_aggregate(session: &Session, app: &App) -> Box<dyn Aggregate> {
     if let Type::App {
         aggregate: true, ..
     } = session
-        .arena()
-        .get_type(app.func)
-        .get(app.func.as_str())
+        .global_scope()
+        .get(app.func)
         .expect("func to be defined")
     {
-        return if app.func.eq_ignore_ascii_case("count") {
+        let fun_name = session.arena().get_str(app.func);
+        return if fun_name.eq_ignore_ascii_case("count") {
             Box::new(CountAggregate::default())
-        } else if app.func.eq_ignore_ascii_case("avg") {
+        } else if fun_name.eq_ignore_ascii_case("avg") {
             Box::new(AverageAggregate::default())
-        } else if app.func.eq_ignore_ascii_case("unique") {
+        } else if fun_name.eq_ignore_ascii_case("unique") {
             Box::new(UniqueAggregate::default())
         } else {
             unreachable!("impossible as such function wouldn't pass the static analysis")
@@ -144,7 +144,7 @@ struct AggOrdered {
 }
 
 pub struct AggQuery<'a> {
-    srcs: Sources,
+    srcs: Sources<'a>,
     interpreter: Interpreter<'a>,
     query: Query<Typed>,
     emit: Emit,
@@ -154,7 +154,7 @@ pub struct AggQuery<'a> {
 }
 
 impl<'a> AggQuery<'a> {
-    pub fn new(srcs: Sources, session: &'a Session, query: Query<Typed>) -> Self {
+    pub fn new(srcs: Sources<'a>, session: &'a Session, query: Query<Typed>) -> Self {
         let emit = if query.group_by.is_some() {
             Emit::Grouped {
                 ordered: query.order_by.as_ref().map(|o| o.order),
