@@ -15,11 +15,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::{mem, vec};
 
-pub trait Aggregate {
-    fn fold(&mut self, params: &[QueryValue]);
-    fn complete(&self) -> QueryValue;
-}
-
 fn instantiate_aggregate(session: &Session, app: &App) -> Agg {
     if let Type::App {
         aggregate: true, ..
@@ -92,6 +87,19 @@ impl AggKind {
                     Self::load_expr(aggs, session, field.expr);
                 }
             }
+
+            Value::Array(arr) => {
+                for expr in session.arena().get_vec(arr) {
+                    Self::load_expr(aggs, session, *expr);
+                }
+            }
+
+            Value::Binary(binary) => {
+                Self::load_expr(aggs, session, binary.lhs);
+                Self::load_expr(aggs, session, binary.rhs);
+            }
+
+            Value::Unary(unary) => Self::load_expr(aggs, session, unary.expr),
 
             _ => {}
         }

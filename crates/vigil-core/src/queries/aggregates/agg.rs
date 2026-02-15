@@ -22,13 +22,13 @@ impl Agg {
     pub fn unique() -> Self {
         Self::Unique { value: None }
     }
-}
 
-impl Agg {
     pub fn fold(&mut self, params: &[QueryValue]) {
         match self {
             Agg::Avg { count, acc } => {
-                if let QueryValue::Number(n) = params[0] {
+                if !params.is_empty()
+                    && let QueryValue::Number(n) = params[0]
+                {
                     *count += 1;
                     *acc += *n;
 
