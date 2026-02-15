@@ -8,8 +8,8 @@ use crate::{
     values::QueryValue,
 };
 use eventql_parser::{
-    prelude::{Type, Typed}, App, ExprRef, Query, Session,
-    Value,
+    App, ExprRef, Query, Session, Value,
+    prelude::{Type, Typed},
 };
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
