@@ -1,22 +1,19 @@
-mod average;
-mod count;
-mod unique;
+mod agg;
 
+use crate::queries::aggregates::agg::Agg;
 use crate::queries::orderer::QueryOrderer;
 use crate::{
     eval::{EvalError, EvalResult, Interpreter},
-    queries::{
-        Sources,
-        aggregates::{average::AverageAggregate, count::CountAggregate, unique::UniqueAggregate},
-    },
+    queries::Sources,
     values::QueryValue,
 };
 use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use eventql_parser::prelude::Expr;
 use eventql_parser::{
-    App, Order, Query, Session,
+    App, ExprRef, Order, Query, Session, Value,
     prelude::{Type, Typed},
 };
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::vec;
 
@@ -26,7 +23,7 @@ pub trait Aggregate {
 }
 
 enum AggState {
-    Single(Box<dyn Aggregate>),
+    Single(Agg),
     Record(CaseInsensitiveHashMap<AggState>),
 }
 
@@ -38,9 +35,7 @@ impl AggState {
 
                 for field in session.arena().get_rec(fields) {
                     let field_name = session.arena().get_str(field.name);
-                    if let eventql_parser::Value::App(app) =
-                        session.arena().get_expr(field.expr).value
-                    {
+                    if let Value::App(app) = session.arena().get_expr(field.expr).value {
                         aggs.insert(
                             field_name,
                             Self::Single(instantiate_aggregate(session, &app)),
@@ -48,8 +43,7 @@ impl AggState {
                         continue;
                     }
 
-                    let agg: Box<dyn Aggregate> = Box::new(UniqueAggregate::default());
-                    aggs.insert(field_name, Self::Single(agg));
+                    aggs.insert(field_name, Self::Single(Agg::unique()));
                 }
 
                 Self::Record(aggs)
@@ -92,7 +86,7 @@ fn instantiate_ordered_aggregate<'a>(
     }
 }
 
-fn instantiate_aggregate(session: &Session, app: &App) -> Box<dyn Aggregate> {
+fn instantiate_aggregate(session: &Session, app: &App) -> Agg {
     if let Type::App {
         aggregate: true, ..
     } = session
@@ -102,17 +96,56 @@ fn instantiate_aggregate(session: &Session, app: &App) -> Box<dyn Aggregate> {
     {
         let fun_name = session.arena().get_str(app.func);
         return if fun_name.eq_ignore_ascii_case("count") {
-            Box::new(CountAggregate::default())
+            Agg::count()
         } else if fun_name.eq_ignore_ascii_case("avg") {
-            Box::new(AverageAggregate::default())
+            Agg::avg()
         } else if fun_name.eq_ignore_ascii_case("unique") {
-            Box::new(UniqueAggregate::default())
+            Agg::unique()
         } else {
             unreachable!("impossible as such function wouldn't pass the static analysis")
         };
     }
 
     panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
+}
+
+#[derive(Default, Clone)]
+struct Aggs {
+    inner: HashMap<App, Agg>,
+}
+
+impl Aggs {
+    fn load(&mut self, session: &Session, query: &Query<Typed>) {
+        if let Some(group_by) = &query.group_by {
+            self.load_expr(session, group_by.expr);
+
+            if let Some(predicate) = group_by.predicate {
+                self.load_expr(session, predicate);
+            }
+
+            if let Some(order_by) = query.order_by {
+                self.load_expr(session, order_by.expr);
+            }
+        }
+    }
+
+    fn load_expr(&mut self, session: &Session, expr: ExprRef) {
+        match session.arena().get_expr(expr).value {
+            Value::App(app) => {
+                if let Entry::Vacant(entry) = self.inner.entry(app) {
+                    entry.insert(instantiate_aggregate(session, &app));
+                }
+            }
+
+            Value::Record(fields) => {
+                for field in session.arena().get_rec(fields) {
+                    self.load_expr(session, field.expr);
+                }
+            }
+
+            _ => {}
+        }
+    }
 }
 
 enum Emit {
