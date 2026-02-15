@@ -8,8 +8,8 @@ use crate::{
     values::QueryValue,
 };
 use eventql_parser::{
-    App, ExprRef, Query, Session, Value,
-    prelude::{Type, Typed},
+    prelude::{Type, Typed}, App, ExprRef, Query, Session,
+    Value,
 };
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -151,10 +151,10 @@ impl EvalAgg {
             AggKind::Grouped { aggs, having, .. } => {
                 let having = having.as_ref().copied();
 
-                if let Some(order) = query.order_by.map(|o| o.order) {
-                    let mut orderer = QueryOrderer::new(order);
+                if let Some(order_by) = query.order_by {
+                    let mut orderer = QueryOrderer::new(order_by.order);
 
-                    for (key, aggs) in aggs.iter() {
+                    for aggs in aggs.values() {
                         if let Some(predicate) = having {
                             let value = self.complete_aggs(interpreter, aggs, predicate)?;
                             if !matches!(value, QueryValue::Bool(true)) {
@@ -162,8 +162,9 @@ impl EvalAgg {
                             }
                         }
 
+                        let sort_key = self.complete_aggs(interpreter, aggs, order_by.expr)?;
                         let value = self.complete_aggs(interpreter, aggs, query.projection)?;
-                        orderer.insert(key.clone(), value);
+                        orderer.insert(sort_key, value);
                     }
 
                     orderer.prepare_for_streaming();
