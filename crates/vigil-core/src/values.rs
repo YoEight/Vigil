@@ -1,10 +1,10 @@
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use eventql_parser::{Session, Type};
 use ordered_float::OrderedFloat;
 use serde::Serialize;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Serialize)]
 pub enum QueryValue {
@@ -32,6 +32,22 @@ impl PartialEq for QueryValue {
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Record(a), Self::Record(b)) => a == b,
             _ => false,
+        }
+    }
+}
+
+impl Hash for QueryValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            QueryValue::Null => i64::MIN.hash(state),
+            QueryValue::String(s) => s.hash(state),
+            QueryValue::Number(n) => n.hash(state),
+            QueryValue::Bool(b) => b.hash(state),
+            QueryValue::Record(r) => r.hash(state),
+            QueryValue::Array(a) => a.hash(state),
+            QueryValue::DateTime(dt) => dt.hash(state),
+            QueryValue::Date(d) => d.hash(state),
+            QueryValue::Time(t) => t.hash(state),
         }
     }
 }

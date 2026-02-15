@@ -10,8 +10,8 @@ use crate::{
 use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use eventql_parser::prelude::Expr;
 use eventql_parser::{
-    App, ExprRef, Order, Query, Session, Value,
-    prelude::{Type, Typed},
+    prelude::{Type, Typed}, App, ExprRef, Order, Query, Session,
+    Value,
 };
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -109,8 +109,37 @@ fn instantiate_aggregate(session: &Session, app: &App) -> Agg {
     panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
 }
 
+enum AggKind {
+    Regular(Aggs),
+    Grouped {
+        base: Aggs,
+        value: Value,
+        aggs: HashMap<QueryValue, Aggs>,
+    },
+}
+
+impl AggKind {
+    fn progress(&mut self, interpreter: &Interpreter) -> EvalResult<()> {
+        match self {
+            AggKind::Regular(aggs) => {
+                aggs.fold(interpreter)?;
+            }
+
+            AggKind::Grouped { base, value, aggs } => {
+                let key = interpreter.eval(*value)?;
+                let agg = aggs.entry(key).or_insert_with(|| base.clone());
+
+                agg.fold(interpreter)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Default, Clone)]
 struct Aggs {
+    buffer: Vec<QueryValue>,
     inner: HashMap<App, Agg>,
 }
 
@@ -145,6 +174,19 @@ impl Aggs {
 
             _ => {}
         }
+    }
+
+    fn fold(&mut self, interpreter: &Interpreter) -> EvalResult<()> {
+        for (app, agg) in self.inner.iter_mut() {
+            for arg in interpreter.session.arena().get_vec(app.args) {
+                self.buffer.push(interpreter.eval_expr(*arg)?);
+            }
+
+            agg.fold(&self.buffer);
+            self.buffer.clear();
+        }
+
+        Ok(())
     }
 }
 
