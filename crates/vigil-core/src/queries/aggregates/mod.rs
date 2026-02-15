@@ -60,8 +60,6 @@ impl AggKind {
         Self::load_expr(&mut aggs, session, query.projection);
 
         if let Some(group_by) = &query.group_by {
-            Self::load_expr(&mut aggs, session, group_by.expr);
-
             if let Some(predicate) = group_by.predicate {
                 Self::load_expr(&mut aggs, session, predicate);
             }
@@ -132,9 +130,8 @@ impl EvalAgg {
             }
 
             agg.fold(&self.buffer);
+            self.buffer.clear();
         }
-
-        self.buffer.clear();
 
         Ok(())
     }
