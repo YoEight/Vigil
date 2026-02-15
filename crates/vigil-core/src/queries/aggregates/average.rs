@@ -14,7 +14,7 @@ impl Aggregate for AverageAggregate {
 
         if let QueryValue::Number(n) = params[0] {
             self.count += 1;
-            self.acc += n;
+            self.acc += *n;
 
             return;
         }
@@ -24,13 +24,13 @@ impl Aggregate for AverageAggregate {
 
     fn complete(&self) -> QueryValue {
         if self.acc.is_nan() {
-            return QueryValue::Number(f64::NAN);
+            return QueryValue::Number(f64::NAN.into());
         }
 
         if self.count == 0 {
-            QueryValue::Number(0f64)
+            QueryValue::Number(0f64.into())
         } else {
-            QueryValue::Number(self.acc / self.count as f64)
+            QueryValue::Number((self.acc / self.count as f64).into())
         }
     }
 }

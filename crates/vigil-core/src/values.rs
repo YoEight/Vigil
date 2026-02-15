@@ -2,14 +2,15 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use eventql_parser::Type;
+use eventql_parser::{Session, Type};
+use ordered_float::OrderedFloat;
 use serde::Serialize;
 
 #[derive(Clone, Serialize)]
 pub enum QueryValue {
     Null,
     String(String),
-    Number(f64),
+    Number(OrderedFloat<f64>),
     Bool(bool),
     Record(BTreeMap<String, QueryValue>),
     Array(Vec<QueryValue>),
@@ -88,9 +89,12 @@ impl QueryValue {
         match value {
             serde_json::Value::Null => QueryValue::Null,
             serde_json::Value::Bool(b) => QueryValue::Bool(b),
-            serde_json::Value::Number(number) => {
-                QueryValue::Number(number.as_f64().expect("we don't use arbitrary precision"))
-            }
+            serde_json::Value::Number(number) => QueryValue::Number(
+                number
+                    .as_f64()
+                    .expect("we don't use arbitrary precision")
+                    .into(),
+            ),
             serde_json::Value::String(s) => QueryValue::String(s),
             serde_json::Value::Array(values) => {
                 let values = values.into_iter().map(Self::from).collect::<Vec<_>>();
@@ -108,12 +112,16 @@ impl QueryValue {
         }
     }
 
-    pub fn build_from_type_expectation(value: serde_json::Value, expectation: &Type) -> QueryValue {
+    pub fn build_from_type_expectation(
+        session: &Session,
+        value: serde_json::Value,
+        expectation: Type,
+    ) -> QueryValue {
         match expectation {
             Type::Unspecified => Self::from(value),
             Type::Number => {
                 if let serde_json::Value::Number(n) = value {
-                    QueryValue::Number(n.as_f64().expect("we don't use arbitrary precision"))
+                    QueryValue::Number(n.as_f64().expect("we don't use arbitrary precision").into())
                 } else {
                     QueryValue::Null
                 }
@@ -136,7 +144,13 @@ impl QueryValue {
                 if let serde_json::Value::Array(values) = value {
                     let values = values
                         .into_iter()
-                        .map(|v| Self::build_from_type_expectation(v, tpe.as_ref()))
+                        .map(|v| {
+                            Self::build_from_type_expectation(
+                                session,
+                                v,
+                                session.arena().get_type(tpe),
+                            )
+                        })
                         .collect();
 
                     QueryValue::Array(values)
@@ -146,14 +160,20 @@ impl QueryValue {
             }
             Type::Record(map) => {
                 if let serde_json::Value::Object(values) = value {
+                    let map = session.arena().get_type_rec(map);
                     let mut props = BTreeMap::new();
 
                     for (prop_name, prop_value) in values {
-                        let prop_value = if let Some(tpe) = map.get(prop_name.as_str()) {
-                            Self::build_from_type_expectation(prop_value, tpe)
-                        } else {
-                            Self::from(prop_value)
-                        };
+                        let prop_value =
+                            if let Some(str_ref) = session.arena().str_ref(prop_name.as_str()) {
+                                if let Some(tpe) = map.get(&str_ref).copied() {
+                                    Self::build_from_type_expectation(session, prop_value, tpe)
+                                } else {
+                                    Self::from(prop_value)
+                                }
+                            } else {
+                                Self::from(prop_value)
+                            };
 
                         props.insert(prop_name, prop_value);
                     }
@@ -201,7 +221,7 @@ impl QueryValue {
                 }
             }
 
-            // currenlty we don't custom type but will change
+            // currently we don't custom type but will change
             Type::Custom(_) => QueryValue::Null,
         }
     }

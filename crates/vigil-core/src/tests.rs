@@ -1,4 +1,3 @@
-use eventql_parser::{parse_query, prelude::AnalysisOptions};
 use uuid::uuid;
 
 use crate::{
@@ -34,7 +33,6 @@ fn test_illegal_subject() {
 #[test]
 fn test_run_query_from_events() {
     let mut db = Db::default();
-    let options = AnalysisOptions::default();
 
     db.append(
         "companies/krispy",
@@ -56,18 +54,16 @@ fn test_run_query_from_events() {
     )
     .unwrap();
 
-    let query = parse_query(include_str!("./resources/query_from_events.eql"))
-        .unwrap()
-        .run_static_analysis(&options)
-        .unwrap();
-
-    insta::assert_yaml_snapshot!(db.run_query(&options, &query).collect::<Vec<_>>());
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_from_events.eql"))
+            .unwrap()
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn test_run_query_department_grouping() {
     let mut db = Db::default();
-    let options = AnalysisOptions::default();
 
     db.append(
         "companies/krispy",
@@ -142,13 +138,9 @@ fn test_run_query_department_grouping() {
     )
     .unwrap();
 
-    let query = parse_query(include_str!("./resources/department-grouping.eql"))
-        .unwrap()
-        .run_static_analysis(&options)
-        .unwrap();
-
     let mut result = db
-        .run_query(&options, &query)
+        .run_query(include_str!("./resources/department-grouping.eql"))
+        .unwrap()
         .collect::<EvalResult<Vec<_>>>()
         .unwrap();
 
@@ -170,7 +162,6 @@ fn test_run_query_department_grouping() {
 #[test]
 fn test_run_query_department_grouping_ordered() {
     let mut db = Db::default();
-    let options = AnalysisOptions::default();
 
     db.append(
         "companies/krispy",
@@ -245,13 +236,9 @@ fn test_run_query_department_grouping_ordered() {
     )
     .unwrap();
 
-    let query = parse_query(include_str!("./resources/department-grouping-ordered.eql"))
-        .unwrap()
-        .run_static_analysis(&options)
-        .unwrap();
-
     insta::assert_yaml_snapshot!(
-        db.run_query(&options, &query)
+        db.run_query(include_str!("./resources/department-grouping-ordered.eql"))
+            .unwrap()
             .collect::<EvalResult<Vec<_>>>()
     );
 }
@@ -259,7 +246,6 @@ fn test_run_query_department_grouping_ordered() {
 #[test]
 fn test_query_order_by() {
     let mut db = Db::default();
-    let options = AnalysisOptions::default();
 
     db.append(
         "companies/krispy",
@@ -334,13 +320,9 @@ fn test_query_order_by() {
     )
     .unwrap();
 
-    let query = parse_query(include_str!("./resources/query_order_by.eql"))
-        .unwrap()
-        .run_static_analysis(&options)
-        .unwrap();
-
     insta::assert_yaml_snapshot!(
-        db.run_query(&options, &query)
+        db.run_query(include_str!("./resources/query_order_by.eql"))
+            .unwrap()
             .collect::<EvalResult<Vec<_>>>()
     );
 }
@@ -348,7 +330,6 @@ fn test_query_order_by() {
 #[test]
 fn test_query_order_by_desc() {
     let mut db = Db::default();
-    let options = AnalysisOptions::default();
 
     db.append(
         "companies/krispy",
@@ -423,13 +404,9 @@ fn test_query_order_by_desc() {
     )
     .unwrap();
 
-    let query = parse_query(include_str!("./resources/query_order_by_desc.eql"))
-        .unwrap()
-        .run_static_analysis(&options)
-        .unwrap();
-
     insta::assert_yaml_snapshot!(
-        db.run_query(&options, &query)
+        db.run_query(include_str!("./resources/query_order_by_desc.eql"))
+            .unwrap()
             .collect::<EvalResult<Vec<_>>>()
     );
 }
