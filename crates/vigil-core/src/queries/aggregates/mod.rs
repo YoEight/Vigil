@@ -10,8 +10,8 @@ use crate::{
 use case_insensitive_hashmap::CaseInsensitiveHashMap;
 use eventql_parser::prelude::Expr;
 use eventql_parser::{
-    prelude::{Type, Typed}, App, ExprRef, Order, Query, Session,
-    Value,
+    App, ExprRef, Order, Query, Session, Value,
+    prelude::{Type, Typed},
 };
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -110,83 +110,173 @@ fn instantiate_aggregate(session: &Session, app: &App) -> Agg {
 }
 
 enum AggKind {
-    Regular(Aggs),
+    Regular(HashMap<App, Agg>),
     Grouped {
-        base: Aggs,
+        base: HashMap<App, Agg>,
         value: Value,
-        aggs: HashMap<QueryValue, Aggs>,
+        aggs: HashMap<QueryValue, HashMap<App, Agg>>,
     },
 }
 
 impl AggKind {
-    fn progress(&mut self, interpreter: &Interpreter) -> EvalResult<()> {
-        match self {
-            AggKind::Regular(aggs) => {
-                aggs.fold(interpreter)?;
-            }
+    fn load(session: &Session, query: &Query<Typed>) -> Self {
+        let mut aggs = HashMap::new();
 
-            AggKind::Grouped { base, value, aggs } => {
-                let key = interpreter.eval(*value)?;
-                let agg = aggs.entry(key).or_insert_with(|| base.clone());
+        Self::load_expr(&mut aggs, session, query.projection);
 
-                agg.fold(interpreter)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Default, Clone)]
-struct Aggs {
-    buffer: Vec<QueryValue>,
-    inner: HashMap<App, Agg>,
-}
-
-impl Aggs {
-    fn load(&mut self, session: &Session, query: &Query<Typed>) {
         if let Some(group_by) = &query.group_by {
-            self.load_expr(session, group_by.expr);
+            Self::load_expr(&mut aggs, session, group_by.expr);
 
             if let Some(predicate) = group_by.predicate {
-                self.load_expr(session, predicate);
+                Self::load_expr(&mut aggs, session, predicate);
             }
 
             if let Some(order_by) = query.order_by {
-                self.load_expr(session, order_by.expr);
+                Self::load_expr(&mut aggs, session, order_by.expr);
             }
+
+            Self::Grouped {
+                base: aggs,
+                value: session.arena().get_expr(group_by.expr).value,
+                aggs: Default::default(),
+            }
+        } else {
+            Self::Regular(aggs)
         }
     }
 
-    fn load_expr(&mut self, session: &Session, expr: ExprRef) {
+    fn load_expr(aggs: &mut HashMap<App, Agg>, session: &Session, expr: ExprRef) {
         match session.arena().get_expr(expr).value {
             Value::App(app) => {
-                if let Entry::Vacant(entry) = self.inner.entry(app) {
+                if let Entry::Vacant(entry) = aggs.entry(app) {
                     entry.insert(instantiate_aggregate(session, &app));
                 }
             }
 
             Value::Record(fields) => {
                 for field in session.arena().get_rec(fields) {
-                    self.load_expr(session, field.expr);
+                    Self::load_expr(aggs, session, field.expr);
                 }
             }
 
             _ => {}
         }
     }
+}
 
-    fn fold(&mut self, interpreter: &Interpreter) -> EvalResult<()> {
-        for (app, agg) in self.inner.iter_mut() {
+struct EvalAgg {
+    buffer: Vec<QueryValue>,
+}
+
+impl EvalAgg {
+    fn fold(&mut self, interpreter: &Interpreter, kind: &mut AggKind) -> EvalResult<()> {
+        match kind {
+            AggKind::Regular(aggs) => self.fold_aggs(interpreter, aggs),
+
+            AggKind::Grouped { base, value, aggs } => {
+                let key = interpreter.eval(*value)?;
+                let aggs = aggs.entry(key).or_insert_with(|| base.clone());
+
+                self.fold_aggs(interpreter, aggs)
+            }
+        }
+    }
+
+    fn fold_aggs(
+        &mut self,
+        interpreter: &Interpreter,
+        aggs: &mut HashMap<App, Agg>,
+    ) -> EvalResult<()> {
+        for (app, agg) in aggs.iter_mut() {
             for arg in interpreter.session.arena().get_vec(app.args) {
                 self.buffer.push(interpreter.eval_expr(*arg)?);
             }
 
             agg.fold(&self.buffer);
-            self.buffer.clear();
+        }
+
+        self.buffer.clear();
+
+        Ok(())
+    }
+
+    fn complete(
+        &mut self,
+        interpreter: &Interpreter,
+        kind: &mut AggKind,
+        query: &Query<Typed>,
+    ) -> EvalResult<()> {
+        match kind {
+            AggKind::Regular(aggs) => {
+                let value = self.complete_aggs(interpreter, aggs, query.projection)?;
+                self.buffer.push(value);
+            }
+
+            AggKind::Grouped { aggs, .. } => {
+                if let Some(order) = query.order_by.map(|o| o.order) {
+                    let mut orderer = QueryOrderer::new(order);
+
+                    for (key, aggs) in aggs.iter() {
+                        let value = self.complete_aggs(interpreter, aggs, query.projection)?;
+                        orderer.insert(key.clone(), value);
+                    }
+
+                    orderer.prepare_for_streaming();
+
+                    while let Some(value) = orderer.next() {
+                        self.buffer.push(value);
+                    }
+                } else {
+                    for aggs in aggs.values() {
+                        let value = self.complete_aggs(interpreter, aggs, query.projection)?;
+                        self.buffer.push(value);
+                    }
+                }
+            }
         }
 
         Ok(())
+    }
+
+    fn complete_aggs(
+        &mut self,
+        interpreter: &Interpreter,
+        aggs: &HashMap<App, Agg>,
+        expr: ExprRef,
+    ) -> EvalResult<QueryValue> {
+        match interpreter.session.arena().get_expr(expr).value {
+            Value::App(app) if aggs.contains_key(&app) => {
+                let agg = aggs.get(&app).unwrap();
+                Ok(agg.complete())
+            }
+
+            Value::Array(arr) => {
+                let vec = interpreter.session.arena().get_vec(arr);
+                let mut values = Vec::with_capacity(vec.len());
+
+                for expr in vec {
+                    values.push(self.complete_aggs(interpreter, aggs, *expr)?);
+                }
+
+                Ok(QueryValue::Array(values))
+            }
+
+            Value::Record(rec) => {
+                let mut props = BTreeMap::new();
+
+                for field in interpreter.session.arena().get_rec(rec) {
+                    let value = self.complete_aggs(interpreter, aggs, field.expr)?;
+                    let name = interpreter.session.arena().get_str(field.name);
+                    props.insert(name.to_owned(), value);
+                }
+
+                Ok(QueryValue::Record(props))
+            }
+
+            _ => Err(EvalError::Runtime(
+                "unreachable code path in aggregate computation".into(),
+            )),
+        }
     }
 }
 
@@ -361,55 +451,5 @@ impl<'a> Iterator for AggQuery<'a> {
                 return Some(Err(e));
             }
         }
-    }
-}
-
-fn eval_agg_value(
-    interpreter: &Interpreter,
-    value: eventql_parser::Value,
-    state: &mut AggState,
-) -> EvalResult<()> {
-    match (state, value) {
-        (AggState::Single(agg), eventql_parser::Value::App(app)) => {
-            let fn_args = interpreter.session.arena().get_vec(app.args);
-            let mut args = Vec::with_capacity(fn_args.len());
-
-            for arg in fn_args {
-                args.push(interpreter.eval(interpreter.session.arena().get_expr(*arg).value)?);
-            }
-
-            agg.fold(args.as_slice());
-
-            Ok(())
-        }
-
-        (AggState::Single(agg), value) => {
-            let value = interpreter.eval(value)?;
-
-            agg.fold(&[value]);
-
-            Ok(())
-        }
-
-        (AggState::Record(aggs), eventql_parser::Value::Record(props)) => {
-            for prop in interpreter.session.arena().get_rec(props) {
-                if let Some(agg) = aggs.get_mut(interpreter.session.arena().get_str(prop.name)) {
-                    eval_agg_value(
-                        interpreter,
-                        interpreter.session.arena().get_expr(prop.expr).value,
-                        agg,
-                    )?;
-                    continue;
-                }
-
-                return Err(EvalError::Runtime("tagged aggregate not found".into()));
-            }
-
-            Ok(())
-        }
-
-        _ => Err(EvalError::Runtime(
-            "invalid aggregate evaluation code path".into(),
-        )),
     }
 }
