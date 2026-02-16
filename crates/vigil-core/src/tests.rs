@@ -242,6 +242,89 @@ fn test_run_query_department_grouping_ordered() {
             .collect::<EvalResult<Vec<_>>>()
     );
 }
+#[test]
+fn test_run_query_department_grouping_having() {
+    let mut db = Db::default();
+
+    db.append(
+        "companies/krispy",
+        vec![
+            Event {
+                event_type: "user-created".to_string(),
+                datacontenttype: "application/json".to_string(),
+                data: serde_json::to_vec(&serde_json::json!({
+                    "id": 1,
+                    "department": "engineering",
+                    "salary": 95_000,
+                }))
+                .unwrap(),
+                ..Default::default()
+            },
+            Event {
+                event_type: "user-created".to_string(),
+                datacontenttype: "application/json".to_string(),
+                data: serde_json::to_vec(&serde_json::json!({
+                    "id": 2,
+                    "department": "engineering",
+                    "salary": 110_000,
+                }))
+                .unwrap(),
+                ..Default::default()
+            },
+            Event {
+                event_type: "user-created".to_string(),
+                datacontenttype: "application/json".to_string(),
+                data: serde_json::to_vec(&serde_json::json!({
+                    "id": 3,
+                    "department": "engineering",
+                    "salary": 88_000,
+                }))
+                .unwrap(),
+                ..Default::default()
+            },
+            Event {
+                event_type: "user-created".to_string(),
+                datacontenttype: "application/json".to_string(),
+                data: serde_json::to_vec(&serde_json::json!({
+                    "id": 4,
+                    "department": "sales",
+                    "salary": 75_000,
+                }))
+                .unwrap(),
+                ..Default::default()
+            },
+            Event {
+                event_type: "user-created".to_string(),
+                datacontenttype: "application/json".to_string(),
+                data: serde_json::to_vec(&serde_json::json!({
+                    "id": 5,
+                    "department": "sales",
+                    "salary": 82_000,
+                }))
+                .unwrap(),
+                ..Default::default()
+            },
+            Event {
+                event_type: "user-created".to_string(),
+                datacontenttype: "application/json".to_string(),
+                data: serde_json::to_vec(&serde_json::json!({
+                    "id": 6,
+                    "department": "marketing",
+                    "salary": 70_000,
+                }))
+                .unwrap(),
+                ..Default::default()
+            },
+        ],
+    )
+    .unwrap();
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/department-grouping-having.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}
 
 #[test]
 fn test_query_order_by() {
