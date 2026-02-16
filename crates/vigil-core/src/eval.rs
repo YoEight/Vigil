@@ -131,7 +131,12 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn eval_binary(&self, op: Operator, a: &QueryValue, b: &QueryValue) -> EvalResult<QueryValue> {
+    pub fn eval_binary(
+        &self,
+        op: Operator,
+        a: &QueryValue,
+        b: &QueryValue,
+    ) -> EvalResult<QueryValue> {
         match (a, b) {
             (QueryValue::Null, QueryValue::Null) => Ok(QueryValue::Null),
 
@@ -277,6 +282,44 @@ impl<'a> Interpreter<'a> {
 
             _ => Err(EvalError::Runtime(
                 format!("unsupported binary operation {op} for given types").into(),
+            )),
+        }
+    }
+
+    pub fn eval_unary(&self, operator: Operator, value: &QueryValue) -> EvalResult<QueryValue> {
+        match operator {
+            Operator::Add => {
+                if let QueryValue::Number(n) = value {
+                    Ok(QueryValue::Number(*n))
+                } else {
+                    Err(EvalError::Runtime(
+                        "unary + operator requires a number".into(),
+                    ))
+                }
+            }
+
+            Operator::Sub => {
+                if let QueryValue::Number(n) = value {
+                    Ok(QueryValue::Number(-n))
+                } else {
+                    Err(EvalError::Runtime(
+                        "unary - operator requires a number".into(),
+                    ))
+                }
+            }
+
+            Operator::Not => {
+                if let QueryValue::Bool(b) = value {
+                    Ok(QueryValue::Bool(!b))
+                } else {
+                    Err(EvalError::Runtime(
+                        "unary ! operator requires a boolean".into(),
+                    ))
+                }
+            }
+
+            _ => Err(EvalError::Runtime(
+                format!("unsupported unary operator: {:?}", operator).into(),
             )),
         }
     }
@@ -618,47 +661,10 @@ impl<'a> Interpreter<'a> {
                 self.eval_binary(binary.operator, &lhs, &rhs)
             }
 
-            eventql_parser::Value::Unary(unary) => match unary.operator {
-                Operator::Add => {
-                    if let QueryValue::Number(n) =
-                        self.eval(self.session.arena().get_expr(unary.expr).value)?
-                    {
-                        Ok(QueryValue::Number(n))
-                    } else {
-                        Err(EvalError::Runtime(
-                            "unary + operator requires a number".into(),
-                        ))
-                    }
-                }
-
-                Operator::Sub => {
-                    if let QueryValue::Number(n) =
-                        self.eval(self.session.arena().get_expr(unary.expr).value)?
-                    {
-                        Ok(QueryValue::Number(-n))
-                    } else {
-                        Err(EvalError::Runtime(
-                            "unary - operator requires a number".into(),
-                        ))
-                    }
-                }
-
-                Operator::Not => {
-                    if let QueryValue::Bool(b) =
-                        self.eval(self.session.arena().get_expr(unary.expr).value)?
-                    {
-                        Ok(QueryValue::Bool(!b))
-                    } else {
-                        Err(EvalError::Runtime(
-                            "unary ! operator requires a boolean".into(),
-                        ))
-                    }
-                }
-
-                _ => Err(EvalError::Runtime(
-                    format!("unsupported unary operator: {:?}", unary.operator).into(),
-                )),
-            },
+            eventql_parser::Value::Unary(unary) => {
+                let value = self.session.arena().get_expr(unary.expr).value;
+                self.eval_unary(unary.operator, &self.eval(value)?)
+            }
 
             eventql_parser::Value::Group(expr) => {
                 self.eval(self.session.arena().get_expr(expr).value)

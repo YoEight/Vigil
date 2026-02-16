@@ -1,12 +1,10 @@
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use eventql_parser::{Session, Type};
 use ordered_float::OrderedFloat;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum QueryValue {
     Null,
     String(String),
@@ -19,63 +17,7 @@ pub enum QueryValue {
     Time(NaiveTime),
 }
 
-impl PartialEq for QueryValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Null, Self::Null) => true,
-            (Self::String(a), Self::String(b)) => a == b,
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::Number(a), Self::Number(b)) => a == b,
-            (Self::DateTime(a), Self::DateTime(b)) => a == b,
-            (Self::Date(a), Self::Date(b)) => a == b,
-            (Self::Time(a), Self::Time(b)) => a == b,
-            (Self::Array(a), Self::Array(b)) => a == b,
-            (Self::Record(a), Self::Record(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for QueryValue {}
-
-impl PartialOrd for QueryValue {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for QueryValue {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (Self::Null, Self::Null) => Ordering::Equal,
-            (Self::String(a), Self::String(b)) => a.cmp(b),
-            (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
-            (Self::Number(a), Self::Number(b)) => a.total_cmp(b),
-            (Self::DateTime(a), Self::DateTime(b)) => a.cmp(b),
-            (Self::Date(a), Self::Date(b)) => a.cmp(b),
-            (Self::Time(a), Self::Time(b)) => a.cmp(b),
-            (Self::Array(a), Self::Array(b)) => a.cmp(b),
-            (Self::Record(a), Self::Record(b)) => a.cmp(b),
-            _ => self.type_order().cmp(&other.type_order()),
-        }
-    }
-}
-
 impl QueryValue {
-    pub fn type_order(&self) -> u8 {
-        match self {
-            QueryValue::Null => 0,
-            QueryValue::String(_) => 1,
-            QueryValue::Number(_) => 2,
-            QueryValue::Bool(_) => 3,
-            QueryValue::Record(_) => 4,
-            QueryValue::Array(_) => 5,
-            QueryValue::DateTime(_) => 6,
-            QueryValue::Date(_) => 7,
-            QueryValue::Time(_) => 8,
-        }
-    }
-
     #[cfg(test)]
     pub fn as_str_or_panic(&self) -> &str {
         if let Self::String(s) = self {
