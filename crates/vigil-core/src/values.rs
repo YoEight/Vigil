@@ -4,6 +4,8 @@ use ordered_float::OrderedFloat;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+use crate::eval::{EvalError, EvalResult};
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum QueryValue {
     Null,
@@ -58,28 +60,30 @@ impl QueryValue {
         session: &Session,
         value: serde_json::Value,
         expectation: Type,
-    ) -> QueryValue {
+    ) -> EvalResult<QueryValue> {
         match expectation {
-            Type::Unspecified => Self::from(value),
+            Type::Unspecified => Ok(Self::from(value)),
             Type::Number => {
                 if let serde_json::Value::Number(n) = value {
-                    QueryValue::Number(n.as_f64().expect("we don't use arbitrary precision").into())
+                    Ok(QueryValue::Number(
+                        n.as_f64().expect("we don't use arbitrary precision").into(),
+                    ))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
             Type::String | Type::Subject => {
                 if let serde_json::Value::String(s) = value {
-                    QueryValue::String(s)
+                    Ok(QueryValue::String(s))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
             Type::Bool => {
                 if let serde_json::Value::Bool(b) = value {
-                    QueryValue::Bool(b)
+                    Ok(QueryValue::Bool(b))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
             Type::Array(tpe) => {
@@ -93,11 +97,11 @@ impl QueryValue {
                                 session.arena().get_type(tpe),
                             )
                         })
-                        .collect();
+                        .collect::<EvalResult<Vec<_>>>()?;
 
-                    QueryValue::Array(values)
+                    Ok(QueryValue::Array(values))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
             Type::Record(map) => {
@@ -109,7 +113,7 @@ impl QueryValue {
                         let prop_value =
                             if let Some(str_ref) = session.arena().str_ref(prop_name.as_str()) {
                                 if let Some(tpe) = map.get(&str_ref).copied() {
-                                    Self::build_from_type_expectation(session, prop_value, tpe)
+                                    Self::build_from_type_expectation(session, prop_value, tpe)?
                                 } else {
                                     Self::from(prop_value)
                                 }
@@ -120,26 +124,23 @@ impl QueryValue {
                         props.insert(prop_name, prop_value);
                     }
 
-                    QueryValue::Record(props)
+                    Ok(QueryValue::Record(props))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
 
-            // this one is unlikely because the user cannot expect a function at that level
-            Type::App {
-                args: _x,
-                result: _y,
-                aggregate: _z,
-            } => todo!("use a proper result type so we can track it if it happens in real life"),
+            Type::App { .. } => Err(EvalError::Runtime(
+                "unexpected function type in value construction".into(),
+            )),
 
             Type::Date => {
                 if let serde_json::Value::String(s) = value
                     && let Ok(date) = s.parse::<NaiveDate>()
                 {
-                    QueryValue::Date(date)
+                    Ok(QueryValue::Date(date))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
 
@@ -147,9 +148,9 @@ impl QueryValue {
                 if let serde_json::Value::String(s) = value
                     && let Ok(time) = s.parse::<NaiveTime>()
                 {
-                    QueryValue::Time(time)
+                    Ok(QueryValue::Time(time))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
 
@@ -157,14 +158,14 @@ impl QueryValue {
                 if let serde_json::Value::String(s) = value
                     && let Ok(date_time) = s.parse::<DateTime<Utc>>()
                 {
-                    QueryValue::DateTime(date_time)
+                    Ok(QueryValue::DateTime(date_time))
                 } else {
-                    QueryValue::Null
+                    Ok(QueryValue::Null)
                 }
             }
 
             // currently we don't custom type but will change
-            Type::Custom(_) => QueryValue::Null,
+            Type::Custom(_) => Ok(QueryValue::Null),
         }
     }
 }

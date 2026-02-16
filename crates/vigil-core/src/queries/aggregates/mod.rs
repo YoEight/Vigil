@@ -15,27 +15,28 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::{mem, vec};
 
-fn instantiate_aggregate(session: &Session, app: &App) -> Agg {
-    if let Type::App {
+fn instantiate_aggregate(session: &Session, app: &App) -> EvalResult<Agg> {
+    if let Some(Type::App {
         aggregate: true, ..
-    } = session
-        .global_scope()
-        .get(app.func)
-        .expect("func to be defined")
+    }) = session.global_scope().get(app.func)
     {
         let fun_name = session.arena().get_str(app.func);
         return if fun_name.eq_ignore_ascii_case("count") {
-            Agg::count()
+            Ok(Agg::count())
         } else if fun_name.eq_ignore_ascii_case("avg") {
-            Agg::avg()
+            Ok(Agg::avg())
         } else if fun_name.eq_ignore_ascii_case("unique") {
-            Agg::unique()
+            Ok(Agg::unique())
         } else {
-            unreachable!("impossible as such function wouldn't pass the static analysis")
+            Err(EvalError::Runtime(
+                format!("unknown aggregate function: {fun_name}").into(),
+            ))
         };
     }
 
-    panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
+    Err(EvalError::Runtime(
+        "expected an aggregate function but got a regular function instead".into(),
+    ))
 }
 
 enum AggLayout {
@@ -49,61 +50,63 @@ enum AggLayout {
 }
 
 impl AggLayout {
-    fn load(session: &Session, query: &Query<Typed>) -> Self {
+    fn load(session: &Session, query: &Query<Typed>) -> EvalResult<Self> {
         let mut aggs = HashMap::new();
 
-        Self::load_expr(&mut aggs, session, query.projection);
+        Self::load_expr(&mut aggs, session, query.projection)?;
 
         if let Some(group_by) = &query.group_by {
             if let Some(predicate) = group_by.predicate {
-                Self::load_expr(&mut aggs, session, predicate);
+                Self::load_expr(&mut aggs, session, predicate)?;
             }
 
             if let Some(order_by) = query.order_by {
-                Self::load_expr(&mut aggs, session, order_by.expr);
+                Self::load_expr(&mut aggs, session, order_by.expr)?;
             }
 
-            Self::Grouped {
+            Ok(Self::Grouped {
                 base: aggs,
                 value: session.arena().get_expr(group_by.expr).value,
                 having: group_by.predicate,
                 aggs: Default::default(),
-            }
+            })
         } else {
-            Self::Regular(aggs)
+            Ok(Self::Regular(aggs))
         }
     }
 
-    fn load_expr(aggs: &mut HashMap<App, Agg>, session: &Session, expr: ExprRef) {
+    fn load_expr(aggs: &mut HashMap<App, Agg>, session: &Session, expr: ExprRef) -> EvalResult<()> {
         match session.arena().get_expr(expr).value {
             Value::App(app) => {
                 if let Entry::Vacant(entry) = aggs.entry(app) {
-                    entry.insert(instantiate_aggregate(session, &app));
+                    entry.insert(instantiate_aggregate(session, &app)?);
                 }
             }
 
             Value::Record(fields) => {
                 for field in session.arena().get_rec(fields) {
-                    Self::load_expr(aggs, session, field.expr);
+                    Self::load_expr(aggs, session, field.expr)?;
                 }
             }
 
             Value::Array(arr) => {
                 for expr in session.arena().get_vec(arr) {
-                    Self::load_expr(aggs, session, *expr);
+                    Self::load_expr(aggs, session, *expr)?;
                 }
             }
 
             Value::Binary(binary) => {
-                Self::load_expr(aggs, session, binary.lhs);
-                Self::load_expr(aggs, session, binary.rhs);
+                Self::load_expr(aggs, session, binary.lhs)?;
+                Self::load_expr(aggs, session, binary.rhs)?;
             }
 
-            Value::Unary(unary) => Self::load_expr(aggs, session, unary.expr),
-            Value::Group(expr) => Self::load_expr(aggs, session, expr),
+            Value::Unary(unary) => Self::load_expr(aggs, session, unary.expr)?,
+            Value::Group(expr) => Self::load_expr(aggs, session, expr)?,
 
             _ => {}
         }
+
+        Ok(())
     }
 }
 
@@ -201,8 +204,8 @@ impl AggEvaluator {
     ) -> EvalResult<QueryValue> {
         match interpreter.session.arena().get_expr(expr).value {
             Value::App(app) if aggs.contains_key(&app) => {
-                let agg = aggs.get(&app).unwrap();
-                Ok(agg.complete())
+                // safe: guarded by contains_key above
+                Ok(aggs[&app].complete())
             }
 
             Value::Array(arr) => {
@@ -260,10 +263,10 @@ pub struct AggQuery<'a> {
 }
 
 impl<'a> AggQuery<'a> {
-    pub fn new(srcs: Sources<'a>, session: &'a Session, query: Query<Typed>) -> Self {
-        let kind = AggLayout::load(session, &query);
+    pub fn new(srcs: Sources<'a>, session: &'a Session, query: Query<Typed>) -> EvalResult<Self> {
+        let kind = AggLayout::load(session, &query)?;
 
-        Self {
+        Ok(Self {
             srcs,
             query,
             layout: kind,
@@ -271,7 +274,7 @@ impl<'a> AggQuery<'a> {
             completed: false,
             results: Default::default(),
             evaluator: Default::default(),
-        }
+        })
     }
 }
 
