@@ -13,6 +13,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    eval::EvalResult,
     queries::{Row, Sources, aggregates::AggQuery, events::EventQuery},
     values::QueryValue,
 };
@@ -46,7 +47,7 @@ pub struct Event {
 }
 
 impl Event {
-    fn project(&self, session: &Session, expected: Type) -> QueryValue {
+    fn project(&self, session: &Session, expected: Type) -> EvalResult<QueryValue> {
         if let Type::Record(rec) = expected {
             let mut props = BTreeMap::new();
             for (name, value) in session.arena().get_type_rec(rec) {
@@ -135,7 +136,7 @@ impl Event {
                                         name,
                                         QueryValue::build_from_type_expectation(
                                             session, payload, *value,
-                                        ),
+                                        )?,
                                     );
                                 } else {
                                     props.insert(name, QueryValue::Null);
@@ -158,9 +159,9 @@ impl Event {
                 }
             }
 
-            QueryValue::Record(props)
+            Ok(QueryValue::Record(props))
         } else {
-            QueryValue::Null
+            Ok(QueryValue::Null)
         }
     }
 }
@@ -346,7 +347,7 @@ impl Db {
                             Box::new(
                                 self.events
                                     .iter()
-                                    .map(move |e| Ok(e.project(&self.session, tpe))),
+                                    .map(move |e| e.project(&self.session, tpe)),
                             ),
                         );
 
@@ -364,7 +365,7 @@ impl Db {
                             query_src.binding.name,
                             Box::new(
                                 self.iter_subject(path)
-                                    .map(move |e| Ok(e.project(&self.session, tpe))),
+                                    .map(move |e| e.project(&self.session, tpe)),
                             ),
                         );
 
@@ -385,7 +386,10 @@ impl Db {
         }
 
         if query.meta.aggregate {
-            Box::new(AggQuery::new(srcs, &self.session, query))
+            match AggQuery::new(srcs, &self.session, query) {
+                Ok(agg_query) => Box::new(agg_query),
+                Err(e) => Box::new(std::iter::once(Err(e))),
+            }
         } else {
             Box::new(EventQuery::new(srcs, &self.session, query))
         }
