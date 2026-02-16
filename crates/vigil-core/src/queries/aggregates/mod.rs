@@ -38,7 +38,7 @@ fn instantiate_aggregate(session: &Session, app: &App) -> Agg {
     panic!("STATIC ANALYSIS BUG: expected an aggregate function but got a regular instead")
 }
 
-enum AggKind {
+enum AggLayout {
     Regular(HashMap<App, Agg>),
     Grouped {
         base: HashMap<App, Agg>,
@@ -48,7 +48,7 @@ enum AggKind {
     },
 }
 
-impl AggKind {
+impl AggLayout {
     fn load(session: &Session, query: &Query<Typed>) -> Self {
         let mut aggs = HashMap::new();
 
@@ -100,6 +100,7 @@ impl AggKind {
             }
 
             Value::Unary(unary) => Self::load_expr(aggs, session, unary.expr),
+            Value::Group(expr) => Self::load_expr(aggs, session, expr),
 
             _ => {}
         }
@@ -107,16 +108,16 @@ impl AggKind {
 }
 
 #[derive(Default)]
-struct EvalAgg {
+struct AggEvaluator {
     buffer: Vec<QueryValue>,
 }
 
-impl EvalAgg {
-    fn fold(&mut self, interpreter: &Interpreter, kind: &mut AggKind) -> EvalResult<()> {
+impl AggEvaluator {
+    fn fold(&mut self, interpreter: &Interpreter, kind: &mut AggLayout) -> EvalResult<()> {
         match kind {
-            AggKind::Regular(aggs) => self.fold_aggs(interpreter, aggs),
+            AggLayout::Regular(aggs) => self.fold_aggs(interpreter, aggs),
 
-            AggKind::Grouped {
+            AggLayout::Grouped {
                 base, value, aggs, ..
             } => {
                 let key = interpreter.eval(*value)?;
@@ -147,16 +148,16 @@ impl EvalAgg {
     fn complete(
         &mut self,
         interpreter: &Interpreter,
-        kind: &mut AggKind,
+        kind: &mut AggLayout,
         query: &Query<Typed>,
     ) -> EvalResult<()> {
         match kind {
-            AggKind::Regular(aggs) => {
+            AggLayout::Regular(aggs) => {
                 let value = self.complete_aggs(interpreter, aggs, query.projection)?;
                 self.buffer.push(value);
             }
 
-            AggKind::Grouped { aggs, having, .. } => {
+            AggLayout::Grouped { aggs, having, .. } => {
                 let having = having.as_ref().copied();
 
                 if let Some(order_by) = query.order_by {
@@ -239,6 +240,8 @@ impl EvalAgg {
                 interpreter.eval_unary(unary.operator, &value)
             }
 
+            Value::Group(expr) => self.complete_aggs(interpreter, aggs, expr),
+
             _ => Err(EvalError::Runtime(
                 "unreachable code path in aggregate computation".into(),
             )),
@@ -250,24 +253,24 @@ pub struct AggQuery<'a> {
     srcs: Sources<'a>,
     interpreter: Interpreter<'a>,
     query: Query<Typed>,
-    kind: AggKind,
-    agg_eval: EvalAgg,
+    layout: AggLayout,
+    evaluator: AggEvaluator,
     completed: bool,
     results: vec::IntoIter<QueryValue>,
 }
 
 impl<'a> AggQuery<'a> {
     pub fn new(srcs: Sources<'a>, session: &'a Session, query: Query<Typed>) -> Self {
-        let kind = AggKind::load(session, &query);
+        let kind = AggLayout::load(session, &query);
 
         Self {
             srcs,
             query,
-            kind,
+            layout: kind,
             interpreter: Interpreter::new(session),
             completed: false,
             results: Default::default(),
-            agg_eval: Default::default(),
+            evaluator: Default::default(),
         }
     }
 }
@@ -290,13 +293,13 @@ impl<'a> Iterator for AggQuery<'a> {
             } else {
                 self.completed = true;
                 if let Err(e) =
-                    self.agg_eval
-                        .complete(&self.interpreter, &mut self.kind, &self.query)
+                    self.evaluator
+                        .complete(&self.interpreter, &mut self.layout, &self.query)
                 {
                     return Some(Err(e));
                 }
 
-                self.results = mem::take(&mut self.agg_eval.buffer).into_iter();
+                self.results = mem::take(&mut self.evaluator.buffer).into_iter();
                 continue;
             };
 
@@ -310,7 +313,7 @@ impl<'a> Iterator for AggQuery<'a> {
                 Err(e) => return Some(Err(e)),
             }
 
-            if let Err(e) = self.agg_eval.fold(&self.interpreter, &mut self.kind) {
+            if let Err(e) = self.evaluator.fold(&self.interpreter, &mut self.layout) {
                 return Some(Err(e));
             }
         }
