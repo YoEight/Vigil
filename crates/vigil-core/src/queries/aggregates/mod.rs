@@ -245,9 +245,7 @@ impl AggEvaluator {
 
             Value::Group(expr) => self.complete_aggs(interpreter, aggs, expr),
 
-            _ => Err(EvalError::Runtime(
-                "unreachable code path in aggregate computation".into(),
-            )),
+            x => interpreter.eval(x),
         }
     }
 }
