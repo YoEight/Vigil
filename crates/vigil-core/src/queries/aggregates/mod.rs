@@ -175,10 +175,10 @@ impl EvalAgg {
                         orderer.insert(sort_key, value);
                     }
 
-                    orderer.prepare_for_streaming();
-
-                    while let Some(value) = orderer.next() {
-                        self.buffer.push(value);
+                    if orderer.prepare_for_streaming().is_some() {
+                        while let Some(value) = orderer.next() {
+                            self.buffer.push(value);
+                        }
                     }
                 } else {
                     for aggs in aggs.values() {
