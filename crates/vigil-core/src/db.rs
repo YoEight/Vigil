@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    iter,
     str::Split,
 };
 
@@ -14,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     eval::EvalResult,
-    queries::{Row, Sources, aggregates::AggQuery, events::EventQuery},
+    queries::{QueryProcessor, Sources, aggregates::AggQuery, events::EventQuery},
     values::QueryValue,
 };
 
@@ -324,13 +323,13 @@ impl Db {
         IndexedEvents::new(subject_events, self.events.as_slice())
     }
 
-    pub fn run_query<'a>(&'a mut self, query: &str) -> Result<Row<'a>> {
+    pub fn run_query(&mut self, query: &str) -> Result<QueryProcessor<'_>> {
         let query = self.session.parse(query)?;
         let query = self.session.run_static_analysis(query)?;
 
         Ok(self.catalog(query))
     }
-    fn catalog<'a>(&'a self, query: Query<Typed>) -> Row<'a> {
+    fn catalog<'a>(&'a self, query: Query<Typed>) -> QueryProcessor<'a> {
         let mut srcs = Sources::default();
         for query_src in &query.sources {
             match &query_src.kind {
@@ -344,7 +343,7 @@ impl Db {
                     {
                         srcs.insert(
                             query_src.binding.name,
-                            Box::new(
+                            QueryProcessor::generic(
                                 self.events
                                     .iter()
                                     .map(move |e| e.project(&self.session, tpe)),
@@ -354,7 +353,7 @@ impl Db {
                         continue;
                     }
 
-                    srcs.insert(query_src.binding.name, Box::new(iter::empty()));
+                    srcs.insert(query_src.binding.name, QueryProcessor::empty());
                 }
 
                 eventql_parser::SourceKind::Subject(path) => {
@@ -363,7 +362,7 @@ impl Db {
 
                         srcs.insert(
                             query_src.binding.name,
-                            Box::new(
+                            QueryProcessor::generic(
                                 self.iter_subject(path)
                                     .map(move |e| e.project(&self.session, tpe)),
                             ),
@@ -372,7 +371,7 @@ impl Db {
                         continue;
                     }
 
-                    srcs.insert(query_src.binding.name, Box::new(iter::empty()));
+                    srcs.insert(query_src.binding.name, QueryProcessor::empty());
                 }
 
                 eventql_parser::SourceKind::Subquery(sub_query) => {
@@ -387,11 +386,11 @@ impl Db {
 
         if query.meta.aggregate {
             match AggQuery::new(srcs, &self.session, query) {
-                Ok(agg_query) => Box::new(agg_query),
-                Err(e) => Box::new(std::iter::once(Err(e))),
+                Ok(agg_query) => QueryProcessor::Aggregate(agg_query),
+                Err(e) => QueryProcessor::Errored(Some(e)),
             }
         } else {
-            Box::new(EventQuery::new(srcs, &self.session, query))
+            QueryProcessor::Regular(EventQuery::new(srcs, &self.session, query))
         }
     }
 }
