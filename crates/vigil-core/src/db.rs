@@ -304,7 +304,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn iter_type<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+    pub fn iter_types<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
         let type_events = self
             .types
             .get(tpe)
@@ -329,31 +329,41 @@ impl Db {
 
         Ok(self.catalog(query))
     }
+
     fn catalog<'a>(&'a self, query: Query<Typed>) -> QueryProcessor<'a> {
         let mut srcs = Sources::default();
         for query_src in &query.sources {
             match &query_src.kind {
                 eventql_parser::SourceKind::Name(name) => {
-                    if self
-                        .session
-                        .arena()
-                        .get_str(*name)
-                        .eq_ignore_ascii_case("events")
-                        && let Some(tpe) = query.meta.scope.get(query_src.binding.name)
-                    {
-                        srcs.insert(
-                            query_src.binding.name,
+                    let name = self.session.arena().get_str(*name);
+
+                    let proc = if let Some(tpe) = query.meta.scope.get(query_src.binding.name) {
+                        if name.eq_ignore_ascii_case("events") {
                             QueryProcessor::generic(
                                 self.events
                                     .iter()
                                     .map(move |e| e.project(&self.session, tpe)),
-                            ),
-                        );
+                            )
+                        } else if name.eq_ignore_ascii_case("eventtypes") {
+                            QueryProcessor::generic(self.types.keys().flat_map(move |event_type| {
+                                self.iter_types(event_type)
+                                    .map(move |e| e.project(&self.session, tpe))
+                            }))
+                        // } else if name.eq_ignore_ascii_case("subjects") {
+                        //     QueryProcessor::generic(self.subjects.keys().flat_map(
+                        //         move |event_type| {
+                        //             self.iter_types(event_type)
+                        //                 .map(move |e| e.project(&self.session, tpe))
+                        //         },
+                        //     ))
+                        } else {
+                            QueryProcessor::empty()
+                        }
+                    } else {
+                        QueryProcessor::empty()
+                    };
 
-                        continue;
-                    }
-
-                    srcs.insert(query_src.binding.name, QueryProcessor::empty());
+                    srcs.insert(query_src.binding.name, proc);
                 }
 
                 eventql_parser::SourceKind::Subject(path) => {
