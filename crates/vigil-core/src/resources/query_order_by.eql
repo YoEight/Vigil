@@ -1,3 +1,7 @@
 FROM e IN events
 ORDER BY e.data.salary
-PROJECT INTO e.data
+PROJECT INTO {
+	id: e.data.id,
+	department: e.data.department,
+	salary: e.data.salary
+}

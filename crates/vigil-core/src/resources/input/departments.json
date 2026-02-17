@@ -1,0 +1,68 @@
+[
+  {
+    "subject": "krispy/boston/employees/james_mitchell",
+    "type": "user-created",
+    "payload": {
+      "id": 1,
+      "firstName": "James",
+      "lastName": "Mitchell",
+      "department": "engineering",
+      "salary": 95000
+    }
+  },
+  {
+    "subject": "krispy/nyc/employees/sarah_coleman",
+    "type": "user-created",
+    "payload": {
+      "id": 2,
+      "firstName": "Sarah",
+      "lastName": "Coleman",
+      "department": "engineering",
+      "salary": 110000
+    }
+  },
+  {
+    "subject": "krispy/phily/employees/derek_washington",
+    "type": "user-updated",
+    "payload": {
+      "id": 3,
+      "firstName": "Derek",
+      "lastName": "Washington",
+      "department": "engineering",
+      "salary": 88000
+    }
+  },
+  {
+    "subject": "krispy/la/employees/emily_hartwell",
+    "type": "user-created",
+    "payload": {
+      "id": 4,
+      "firstName": "Emily",
+      "lastName": "Hartwell",
+      "department": "sales",
+      "salary": 75000
+    }
+  },
+  {
+    "subject": "krispy/nyc/employees/marcus_rivera",
+    "type": "user-created",
+    "payload": {
+      "id": 5,
+      "firstName": "Marcus",
+      "lastName": "Rivera",
+      "department": "sales",
+      "salary": 82000
+    }
+  },
+  {
+    "subject": "krispy/boston/employees/laura_chen",
+    "type": "user-updated",
+    "payload": {
+      "id": 6,
+      "firstName": "Laura",
+      "lastName": "Chen",
+      "department": "marketing",
+      "salary": 70000
+    }
+  }
+]
