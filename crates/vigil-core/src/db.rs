@@ -201,6 +201,12 @@ impl<'a> Subjects<'a> {
             current: subject,
         }
     }
+
+    pub fn all(root: &'a Subject) -> Self {
+        Self::Browse {
+            queue: VecDeque::from_iter([root]),
+        }
+    }
 }
 
 impl<'a> Iterator for Subjects<'a> {
@@ -323,6 +329,13 @@ impl Db {
         IndexedEvents::new(subject_events, self.events.as_slice())
     }
 
+    pub fn iter_all_subjects<'a>(&'a self) -> impl Iterator<Item = &'a Event> + 'a {
+        let subject_events =
+            Subjects::all(&self.subjects).flat_map(|sub| sub.events.iter().copied());
+
+        IndexedEvents::new(subject_events, self.events.as_slice())
+    }
+
     pub fn run_query(&mut self, query: &str) -> Result<QueryProcessor<'_>> {
         let query = self.session.parse(query)?;
         let query = self.session.run_static_analysis(query)?;
@@ -349,13 +362,11 @@ impl Db {
                                 self.iter_types(event_type)
                                     .map(move |e| e.project(&self.session, tpe))
                             }))
-                        // } else if name.eq_ignore_ascii_case("subjects") {
-                        //     QueryProcessor::generic(self.subjects.keys().flat_map(
-                        //         move |event_type| {
-                        //             self.iter_types(event_type)
-                        //                 .map(move |e| e.project(&self.session, tpe))
-                        //         },
-                        //     ))
+                        } else if name.eq_ignore_ascii_case("subjects") {
+                            QueryProcessor::generic(
+                                self.iter_all_subjects()
+                                    .map(move |e| e.project(&self.session, tpe)),
+                            )
                         } else {
                             QueryProcessor::empty()
                         }
