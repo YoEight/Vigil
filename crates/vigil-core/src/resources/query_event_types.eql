@@ -1,3 +1,3 @@
 FROM event_type IN eventtypes
 ORDER BY event_type
-PROJECT INTO e
+PROJECT INTO event_type
