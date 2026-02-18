@@ -167,6 +167,7 @@ impl Event {
 
 #[derive(Default)]
 pub struct Subject {
+    name: String,
     events: Vec<usize>,
     nodes: HashMap<String, Subject>,
 }
@@ -176,7 +177,22 @@ impl Subject {
         let name = path.next().unwrap_or_default();
 
         if !name.is_empty() {
-            return self.nodes.entry(name.to_owned()).or_default().entries(path);
+            return self
+                .nodes
+                .entry(name.to_owned())
+                .or_insert_with(|| {
+                    let name = if self.name.is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{}/{}", self.name, name)
+                    };
+
+                    Self {
+                        name,
+                        ..Default::default()
+                    }
+                })
+                .entries(path);
         }
 
         &mut self.events
@@ -322,18 +338,24 @@ impl Db {
         IndexedEvents::new(type_events, self.events.as_slice())
     }
 
-    pub fn iter_subject<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+    pub fn iter_subject_events<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> impl Iterator<Item = &'a Event> + 'a {
         let subject_events =
             Subjects::new(path, &self.subjects).flat_map(|sub| sub.events.iter().copied());
 
         IndexedEvents::new(subject_events, self.events.as_slice())
     }
 
-    pub fn iter_all_subjects<'a>(&'a self) -> impl Iterator<Item = &'a Event> + 'a {
-        let subject_events =
-            Subjects::all(&self.subjects).flat_map(|sub| sub.events.iter().copied());
-
-        IndexedEvents::new(subject_events, self.events.as_slice())
+    pub fn iter_subjects<'a>(&'a self) -> impl Iterator<Item = &'a String> + 'a {
+        Subjects::all(&self.subjects).filter_map(|sub| {
+            if sub.name.is_empty() {
+                None
+            } else {
+                Some(&sub.name)
+            }
+        })
     }
 
     pub fn run_query(&mut self, query: &str) -> Result<QueryProcessor<'_>> {
@@ -365,8 +387,8 @@ impl Db {
                             )
                         } else if name.eq_ignore_ascii_case("subjects") {
                             QueryProcessor::generic(
-                                self.iter_all_subjects()
-                                    .map(move |e| e.project(&self.session, tpe)),
+                                self.iter_subjects()
+                                    .map(|s| Ok(QueryValue::String(s.clone()))),
                             )
                         } else {
                             QueryProcessor::empty()
@@ -385,7 +407,7 @@ impl Db {
                         srcs.insert(
                             query_src.binding.name,
                             QueryProcessor::generic(
-                                self.iter_subject(path)
+                                self.iter_subject_events(path)
                                     .map(move |e| e.project(&self.session, tpe)),
                             ),
                         );

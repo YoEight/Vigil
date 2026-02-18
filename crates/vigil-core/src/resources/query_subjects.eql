@@ -1,0 +1,3 @@
+FROM subject IN subjects
+ORDER BY subject
+PROJECT INTO subject

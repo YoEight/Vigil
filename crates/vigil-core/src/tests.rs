@@ -178,3 +178,16 @@ fn test_query_event_types() {
             .collect::<EvalResult<Vec<_>>>()
     );
 }
+
+#[test]
+fn test_query_subjects() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_subjects.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}
