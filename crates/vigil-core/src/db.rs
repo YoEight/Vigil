@@ -167,6 +167,7 @@ impl Event {
 
 #[derive(Default)]
 pub struct Subject {
+    name: String,
     events: Vec<usize>,
     nodes: HashMap<String, Subject>,
 }
@@ -176,7 +177,22 @@ impl Subject {
         let name = path.next().unwrap_or_default();
 
         if !name.is_empty() {
-            return self.nodes.entry(name.to_owned()).or_default().entries(path);
+            return self
+                .nodes
+                .entry(name.to_owned())
+                .or_insert_with(|| {
+                    let name = if self.name.is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{}/{}", self.name, name)
+                    };
+
+                    Self {
+                        name,
+                        ..Default::default()
+                    }
+                })
+                .entries(path);
         }
 
         &mut self.events
@@ -199,6 +215,12 @@ impl<'a> Subjects<'a> {
         Self::Dive {
             split: path.split('/'),
             current: subject,
+        }
+    }
+
+    pub fn all(root: &'a Subject) -> Self {
+        Self::Browse {
+            queue: VecDeque::from_iter([root]),
         }
     }
 }
@@ -304,7 +326,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn iter_type<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+    pub fn iter_types<'a>(&'a self, tpe: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
         let type_events = self
             .types
             .get(tpe)
@@ -316,11 +338,24 @@ impl Db {
         IndexedEvents::new(type_events, self.events.as_slice())
     }
 
-    pub fn iter_subject<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a Event> + 'a {
+    pub fn iter_subject_events<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> impl Iterator<Item = &'a Event> + 'a {
         let subject_events =
             Subjects::new(path, &self.subjects).flat_map(|sub| sub.events.iter().copied());
 
         IndexedEvents::new(subject_events, self.events.as_slice())
+    }
+
+    pub fn iter_subjects<'a>(&'a self) -> impl Iterator<Item = &'a String> + 'a {
+        Subjects::all(&self.subjects).filter_map(|sub| {
+            if sub.name.is_empty() {
+                None
+            } else {
+                Some(&sub.name)
+            }
+        })
     }
 
     pub fn run_query(&mut self, query: &str) -> Result<QueryProcessor<'_>> {
@@ -329,31 +364,40 @@ impl Db {
 
         Ok(self.catalog(query))
     }
+
     fn catalog<'a>(&'a self, query: Query<Typed>) -> QueryProcessor<'a> {
         let mut srcs = Sources::default();
         for query_src in &query.sources {
             match &query_src.kind {
                 eventql_parser::SourceKind::Name(name) => {
-                    if self
-                        .session
-                        .arena()
-                        .get_str(*name)
-                        .eq_ignore_ascii_case("events")
-                        && let Some(tpe) = query.meta.scope.get(query_src.binding.name)
-                    {
-                        srcs.insert(
-                            query_src.binding.name,
+                    let name = self.session.arena().get_str(*name);
+
+                    let proc = if let Some(tpe) = query.meta.scope.get(query_src.binding.name) {
+                        if name.eq_ignore_ascii_case("events") {
                             QueryProcessor::generic(
                                 self.events
                                     .iter()
                                     .map(move |e| e.project(&self.session, tpe)),
-                            ),
-                        );
+                            )
+                        } else if name.eq_ignore_ascii_case("eventtypes") {
+                            QueryProcessor::generic(
+                                self.types
+                                    .keys()
+                                    .map(|event_type| Ok(QueryValue::String(event_type.clone()))),
+                            )
+                        } else if name.eq_ignore_ascii_case("subjects") {
+                            QueryProcessor::generic(
+                                self.iter_subjects()
+                                    .map(|s| Ok(QueryValue::String(s.clone()))),
+                            )
+                        } else {
+                            QueryProcessor::empty()
+                        }
+                    } else {
+                        QueryProcessor::empty()
+                    };
 
-                        continue;
-                    }
-
-                    srcs.insert(query_src.binding.name, QueryProcessor::empty());
+                    srcs.insert(query_src.binding.name, proc);
                 }
 
                 eventql_parser::SourceKind::Subject(path) => {
@@ -363,7 +407,7 @@ impl Db {
                         srcs.insert(
                             query_src.binding.name,
                             QueryProcessor::generic(
-                                self.iter_subject(path)
+                                self.iter_subject_events(path)
                                     .map(move |e| e.project(&self.session, tpe)),
                             ),
                         );

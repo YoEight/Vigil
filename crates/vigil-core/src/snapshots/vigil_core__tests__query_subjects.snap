@@ -1,0 +1,20 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/query_subjects.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - String: krispy
+  - String: krispy/boston
+  - String: krispy/boston/employees
+  - String: krispy/boston/employees/james_mitchell
+  - String: krispy/boston/employees/laura_chen
+  - String: krispy/la
+  - String: krispy/la/employees
+  - String: krispy/la/employees/emily_hartwell
+  - String: krispy/nyc
+  - String: krispy/nyc/employees
+  - String: krispy/nyc/employees/marcus_rivera
+  - String: krispy/nyc/employees/sarah_coleman
+  - String: krispy/phily
+  - String: krispy/phily/employees
+  - String: krispy/phily/employees/derek_washington

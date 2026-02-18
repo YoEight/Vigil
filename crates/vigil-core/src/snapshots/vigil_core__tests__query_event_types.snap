@@ -1,0 +1,7 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/query_event_types.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - String: user-created
+  - String: user-updated
