@@ -165,3 +165,16 @@ fn test_query_order_by_desc() {
             .collect::<EvalResult<Vec<_>>>()
     );
 }
+
+#[test]
+fn test_query_event_types() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_event_types.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}

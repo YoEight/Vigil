@@ -358,10 +358,11 @@ impl Db {
                                     .map(move |e| e.project(&self.session, tpe)),
                             )
                         } else if name.eq_ignore_ascii_case("eventtypes") {
-                            QueryProcessor::generic(self.types.keys().flat_map(move |event_type| {
-                                self.iter_types(event_type)
-                                    .map(move |e| e.project(&self.session, tpe))
-                            }))
+                            QueryProcessor::generic(
+                                self.types
+                                    .keys()
+                                    .map(|event_type| Ok(QueryValue::String(event_type.clone()))),
+                            )
                         } else if name.eq_ignore_ascii_case("subjects") {
                             QueryProcessor::generic(
                                 self.iter_all_subjects()
