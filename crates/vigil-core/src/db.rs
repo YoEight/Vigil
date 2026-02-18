@@ -4,8 +4,8 @@ use std::{
 };
 
 use eventql_parser::{
-    Query, Session,
-    prelude::{Type, Typed},
+    prelude::{Type, Typed}, Query,
+    Session,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     eval::EvalResult,
-    queries::{QueryProcessor, Sources, aggregates::AggQuery, events::EventQuery},
+    queries::{aggregates::AggQuery, events::EventQuery, QueryProcessor, Sources},
     values::QueryValue,
 };
 
@@ -367,7 +367,7 @@ impl Db {
         Ok(self.catalog(query))
     }
 
-    fn catalog<'a>(&'a self, query: Query<Typed>) -> QueryProcessor<'a> {
+    fn catalog(&self, query: Query<Typed>) -> QueryProcessor<'_> {
         let mut srcs = Sources::default();
         for query_src in &query.sources {
             match &query_src.kind {
