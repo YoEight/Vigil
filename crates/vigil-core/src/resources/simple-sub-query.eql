@@ -1,0 +1,8 @@
+FROM nyc IN (
+	FROM employee IN "krispy/nyc/employees"
+	PROJECT INTO employee
+)
+PROJECT INTO {
+	name: "NYC Employee Average Salary",
+	average: AVG(nyc.data.salary)
+}

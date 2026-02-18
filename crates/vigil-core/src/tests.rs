@@ -191,3 +191,16 @@ fn test_query_subjects() {
             .collect::<EvalResult<Vec<_>>>()
     );
 }
+
+#[test]
+fn test_simple_sub_query() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/simple-sub-query.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}

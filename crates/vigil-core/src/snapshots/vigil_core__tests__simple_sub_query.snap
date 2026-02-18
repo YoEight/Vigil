@@ -1,0 +1,10 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/simple-sub-query.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - Record:
+      average:
+        Number: 96000
+      name:
+        String: NYC Employee Average Salary
