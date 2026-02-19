@@ -38,19 +38,19 @@ impl<'a> Iterator for EventQuery<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.completed {
-                if let Some(Limit::Top(n)) = self.query.limit {
-                    if self.emitted >= n {
-                        return None;
-                    }
+                if let Some(Limit::Top(n)) = self.query.limit
+                    && self.emitted >= n
+                {
+                    return None;
                 }
 
                 let value = self.orderer.next()?;
 
-                if let Some(Limit::Skip(n)) = self.query.limit {
-                    if self.skipped < n {
-                        self.skipped += 1;
-                        continue;
-                    }
+                if let Some(Limit::Skip(n)) = self.query.limit
+                    && self.skipped < n
+                {
+                    self.skipped += 1;
+                    continue;
                 }
 
                 self.emitted += 1;
@@ -89,10 +89,10 @@ impl<'a> Iterator for EventQuery<'a> {
                 continue;
             }
 
-            if let Some(Limit::Top(n)) = self.query.limit {
-                if self.emitted >= n {
-                    return None;
-                }
+            if let Some(Limit::Top(n)) = self.query.limit
+                && self.emitted >= n
+            {
+                return None;
             }
 
             let value = match self.interpreter.eval_expr(self.query.projection) {
@@ -100,11 +100,11 @@ impl<'a> Iterator for EventQuery<'a> {
                 Ok(v) => v,
             };
 
-            if let Some(Limit::Skip(n)) = self.query.limit {
-                if self.skipped < n {
-                    self.skipped += 1;
-                    continue;
-                }
+            if let Some(Limit::Skip(n)) = self.query.limit
+                && self.skipped < n
+            {
+                self.skipped += 1;
+                continue;
             }
 
             self.emitted += 1;
