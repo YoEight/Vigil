@@ -413,7 +413,7 @@ impl<'a> Interpreter<'a> {
                     return Ok(QueryValue::Number(n.floor().into()));
                 }
 
-                if fun_name.eq_ignore_ascii_case("floor")
+                if fun_name.eq_ignore_ascii_case("round")
                     && let QueryValue::Number(n) = &args[0]
                 {
                     return Ok(QueryValue::Number(n.round().into()));
@@ -607,6 +607,18 @@ impl<'a> Interpreter<'a> {
                         QueryValue::Time(t) => Ok(QueryValue::Number((t.minute() as f64).into())),
                         _ => Err(EvalError::Runtime(
                             "minute() requires a DateTime or Time argument".into(),
+                        )),
+                    };
+                }
+
+                if fun_name.eq_ignore_ascii_case("second") {
+                    return match &args[0] {
+                        QueryValue::DateTime(t) => {
+                            Ok(QueryValue::Number((t.second() as f64).into()))
+                        }
+                        QueryValue::Time(t) => Ok(QueryValue::Number((t.second() as f64).into())),
+                        _ => Err(EvalError::Runtime(
+                            "second() requires a DateTime or Time argument".into(),
                         )),
                     };
                 }

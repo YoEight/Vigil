@@ -1,5 +1,6 @@
 FROM e IN events
 GROUP BY e.data.department
+ORDER BY COUNT()
 PROJECT INTO DISTINCT {
 	hasMultiple: COUNT() > 1
 }

@@ -5,7 +5,7 @@ expression: "db.run_query(include_str!(\"./resources/query_agg_distinct.eql\")).
 Ok:
   - Record:
       hasMultiple:
-        Bool: true
+        Bool: false
   - Record:
       hasMultiple:
-        Bool: false
+        Bool: true
