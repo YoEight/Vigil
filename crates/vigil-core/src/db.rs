@@ -128,24 +128,26 @@ impl Event {
                             );
                         }
 
-                        Type::Record(_) => match self.datacontenttype.as_str() {
-                            "application/json" => {
-                                if let Ok(payload) = serde_json::from_slice(&self.data) {
-                                    props.insert(
-                                        name,
-                                        QueryValue::build_from_type_expectation(
-                                            session, payload, *value,
-                                        )?,
-                                    );
-                                } else {
+                        Type::Record(_) | Type::Unspecified => {
+                            match self.datacontenttype.as_str() {
+                                "application/json" => {
+                                    if let Ok(payload) = serde_json::from_slice(&self.data) {
+                                        props.insert(
+                                            name,
+                                            QueryValue::build_from_type_expectation(
+                                                session, payload, *value,
+                                            )?,
+                                        );
+                                    } else {
+                                        props.insert(name, QueryValue::Null);
+                                    }
+                                }
+
+                                _ => {
                                     props.insert(name, QueryValue::Null);
                                 }
                             }
-
-                            _ => {
-                                props.insert(name, QueryValue::Null);
-                            }
-                        },
+                        }
 
                         _ => {
                             props.insert(name, QueryValue::Null);
@@ -365,7 +367,7 @@ impl Db {
         Ok(self.catalog(query))
     }
 
-    fn catalog<'a>(&'a self, query: Query<Typed>) -> QueryProcessor<'a> {
+    fn catalog(&self, query: Query<Typed>) -> QueryProcessor<'_> {
         let mut srcs = Sources::default();
         for query_src in &query.sources {
             match &query_src.kind {
