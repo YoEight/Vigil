@@ -1,0 +1,49 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: result
+---
+- Record:
+    department:
+      String: engineering
+    max:
+      Number: 110000
+    median:
+      Number: 95000
+    min:
+      Number: 88000
+    stddev:
+      Number: 9177.26659862409
+    total:
+      Number: 293000
+    variance:
+      Number: 84222222.22222137
+- Record:
+    department:
+      String: marketing
+    max:
+      Number: 70000
+    median:
+      Number: 70000
+    min:
+      Number: 70000
+    stddev:
+      Number: 0
+    total:
+      Number: 70000
+    variance:
+      Number: 0
+- Record:
+    department:
+      String: sales
+    max:
+      Number: 82000
+    median:
+      Number: 78500
+    min:
+      Number: 75000
+    stddev:
+      Number: 3500
+    total:
+      Number: 157000
+    variance:
+      Number: 12250000
