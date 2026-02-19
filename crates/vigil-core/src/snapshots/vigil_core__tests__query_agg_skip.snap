@@ -1,0 +1,12 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/query_agg_skip.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - Record:
+      avgSalary:
+        Number: 70000
+      department:
+        String: marketing
+      employeeCount:
+        Number: 1

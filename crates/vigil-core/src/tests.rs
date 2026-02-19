@@ -193,6 +193,58 @@ fn test_query_subjects() {
 }
 
 #[test]
+fn test_query_top() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_top.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}
+
+#[test]
+fn test_query_skip() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_skip.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}
+
+#[test]
+fn test_query_agg_top() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_agg_top.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}
+
+#[test]
+fn test_query_agg_skip() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    insta::assert_yaml_snapshot!(
+        db.run_query(include_str!("./resources/query_agg_skip.eql"))
+            .unwrap()
+            .collect::<EvalResult<Vec<_>>>()
+    );
+}
+
+#[test]
 fn test_simple_sub_query() {
     let mut db = Db::default();
 

@@ -1,0 +1,26 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/query_top.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - Record:
+      department:
+        String: marketing
+      id:
+        Number: 6
+      salary:
+        Number: 70000
+  - Record:
+      department:
+        String: sales
+      id:
+        Number: 4
+      salary:
+        Number: 75000
+  - Record:
+      department:
+        String: sales
+      id:
+        Number: 5
+      salary:
+        Number: 82000
