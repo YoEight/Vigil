@@ -1,0 +1,2 @@
+FROM e IN events
+PROJECT INTO DISTINCT e.data.department

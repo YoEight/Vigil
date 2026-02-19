@@ -1,0 +1,8 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/query_distinct.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - String: engineering
+  - String: sales
+  - String: marketing
