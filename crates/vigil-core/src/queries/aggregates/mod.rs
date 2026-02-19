@@ -8,7 +8,7 @@ use crate::{
     values::QueryValue,
 };
 use eventql_parser::{
-    App, ExprRef, Query, Session, Value,
+    App, ExprRef, Limit, Query, Session, Value,
     prelude::{Type, Typed},
 };
 use std::collections::hash_map::Entry;
@@ -300,7 +300,23 @@ impl<'a> Iterator for AggQuery<'a> {
                     return Some(Err(e));
                 }
 
-                self.results = mem::take(&mut self.evaluator.buffer).into_iter();
+                let mut buffer = mem::take(&mut self.evaluator.buffer);
+                if let Some(limit) = self.query.limit {
+                    match limit {
+                        Limit::Skip(n) => {
+                            let n = n as usize;
+                            if n < buffer.len() {
+                                buffer.drain(..n);
+                            } else {
+                                buffer.clear();
+                            }
+                        }
+                        Limit::Top(n) => {
+                            buffer.truncate(n as usize);
+                        }
+                    }
+                }
+                self.results = buffer.into_iter();
                 continue;
             };
 

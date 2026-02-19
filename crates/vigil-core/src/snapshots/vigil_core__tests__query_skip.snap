@@ -1,0 +1,26 @@
+---
+source: crates/vigil-core/src/tests.rs
+expression: "db.run_query(include_str!(\"./resources/query_skip.eql\")).unwrap().collect::<EvalResult<Vec<_>>>()"
+---
+Ok:
+  - Record:
+      department:
+        String: engineering
+      id:
+        Number: 3
+      salary:
+        Number: 88000
+  - Record:
+      department:
+        String: engineering
+      id:
+        Number: 1
+      salary:
+        Number: 95000
+  - Record:
+      department:
+        String: engineering
+      id:
+        Number: 2
+      salary:
+        Number: 110000

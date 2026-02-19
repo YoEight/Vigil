@@ -1,4 +1,4 @@
-use eventql_parser::{Order, Query, Session, prelude::Typed};
+use eventql_parser::{Limit, Order, Query, Session, prelude::Typed};
 
 use crate::queries::orderer::QueryOrderer;
 use crate::{
@@ -13,6 +13,8 @@ pub struct EventQuery<'a> {
     interpreter: Interpreter<'a>,
     orderer: QueryOrderer,
     completed: bool,
+    skipped: u64,
+    emitted: u64,
 }
 
 impl<'a> EventQuery<'a> {
@@ -24,6 +26,8 @@ impl<'a> EventQuery<'a> {
             orderer: QueryOrderer::new(order),
             interpreter: Interpreter::new(session),
             completed: false,
+            skipped: 0,
+            emitted: 0,
         }
     }
 }
@@ -34,7 +38,22 @@ impl<'a> Iterator for EventQuery<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.completed {
+                if let Some(Limit::Top(n)) = self.query.limit {
+                    if self.emitted >= n {
+                        return None;
+                    }
+                }
+
                 let value = self.orderer.next()?;
+
+                if let Some(Limit::Skip(n)) = self.query.limit {
+                    if self.skipped < n {
+                        self.skipped += 1;
+                        continue;
+                    }
+                }
+
+                self.emitted += 1;
                 return Some(Ok(value));
             }
 
@@ -70,7 +89,26 @@ impl<'a> Iterator for EventQuery<'a> {
                 continue;
             }
 
-            return Some(self.interpreter.eval_expr(self.query.projection));
+            if let Some(Limit::Top(n)) = self.query.limit {
+                if self.emitted >= n {
+                    return None;
+                }
+            }
+
+            let value = match self.interpreter.eval_expr(self.query.projection) {
+                Err(e) => return Some(Err(e)),
+                Ok(v) => v,
+            };
+
+            if let Some(Limit::Skip(n)) = self.query.limit {
+                if self.skipped < n {
+                    self.skipped += 1;
+                    continue;
+                }
+            }
+
+            self.emitted += 1;
+            return Some(Ok(value));
         }
     }
 }
