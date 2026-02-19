@@ -12,7 +12,7 @@ use eventql_parser::{
     prelude::{Type, Typed},
 };
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::{mem, vec};
 
 fn instantiate_aggregate(session: &Session, app: &App) -> EvalResult<Agg> {
@@ -313,6 +313,12 @@ impl<'a> Iterator for AggQuery<'a> {
                 }
 
                 let mut buffer = mem::take(&mut self.evaluator.buffer);
+
+                if self.query.distinct {
+                    let mut seen = HashSet::new();
+                    buffer.retain(|v| seen.insert(v.clone()));
+                }
+
                 if let Some(limit) = self.query.limit {
                     match limit {
                         Limit::Skip(n) => {

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use eventql_parser::{Limit, Order, Query, Session, prelude::Typed};
 
 use crate::queries::orderer::QueryOrderer;
@@ -15,6 +17,7 @@ pub struct EventQuery<'a> {
     completed: bool,
     skipped: u64,
     emitted: u64,
+    seen: HashSet<QueryValue>,
 }
 
 impl<'a> EventQuery<'a> {
@@ -28,6 +31,7 @@ impl<'a> EventQuery<'a> {
             completed: false,
             skipped: 0,
             emitted: 0,
+            seen: HashSet::new(),
         }
     }
 }
@@ -50,6 +54,10 @@ impl<'a> Iterator for EventQuery<'a> {
                     && self.skipped < n
                 {
                     self.skipped += 1;
+                    continue;
+                }
+
+                if self.query.distinct && !self.seen.insert(value.clone()) {
                     continue;
                 }
 
@@ -104,6 +112,10 @@ impl<'a> Iterator for EventQuery<'a> {
                 && self.skipped < n
             {
                 self.skipped += 1;
+                continue;
+            }
+
+            if self.query.distinct && !self.seen.insert(value.clone()) {
                 continue;
             }
 
