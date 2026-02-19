@@ -4,8 +4,8 @@ use std::{
 };
 
 use eventql_parser::{
-    prelude::{Type, Typed}, Query,
-    Session,
+    Query, Session,
+    prelude::{Type, Typed},
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     eval::EvalResult,
-    queries::{aggregates::AggQuery, events::EventQuery, QueryProcessor, Sources},
+    queries::{QueryProcessor, Sources, aggregates::AggQuery, events::EventQuery},
     values::QueryValue,
 };
 
