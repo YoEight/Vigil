@@ -1,0 +1,11 @@
+FROM e IN events
+GROUP BY e.data.department
+PROJECT INTO {
+	department: UNIQUE(e.data.department),
+	total: SUM(e.data.salary),
+	min: MIN(e.data.salary),
+	max: MAX(e.data.salary),
+	median: MEDIAN(e.data.salary),
+	stddev: STDDEV(e.data.salary),
+	variance: VARIANCE(e.data.salary)
+}

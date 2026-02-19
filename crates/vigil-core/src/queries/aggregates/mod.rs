@@ -27,6 +27,18 @@ fn instantiate_aggregate(session: &Session, app: &App) -> EvalResult<Agg> {
             Ok(Agg::avg())
         } else if fun_name.eq_ignore_ascii_case("unique") {
             Ok(Agg::unique())
+        } else if fun_name.eq_ignore_ascii_case("sum") {
+            Ok(Agg::sum())
+        } else if fun_name.eq_ignore_ascii_case("min") {
+            Ok(Agg::min())
+        } else if fun_name.eq_ignore_ascii_case("max") {
+            Ok(Agg::max())
+        } else if fun_name.eq_ignore_ascii_case("median") {
+            Ok(Agg::median())
+        } else if fun_name.eq_ignore_ascii_case("stddev") {
+            Ok(Agg::stddev())
+        } else if fun_name.eq_ignore_ascii_case("variance") {
+            Ok(Agg::variance())
         } else {
             Err(EvalError::Runtime(
                 format!("unknown aggregate function: {fun_name}").into(),

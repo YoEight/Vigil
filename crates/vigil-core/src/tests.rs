@@ -193,6 +193,33 @@ fn test_query_subjects() {
 }
 
 #[test]
+fn test_query_agg_functions() {
+    let mut db = Db::default();
+
+    load_departments_dataset(&mut db);
+
+    let mut result = db
+        .run_query(include_str!("./resources/query_agg_functions.eql"))
+        .unwrap()
+        .collect::<EvalResult<Vec<_>>>()
+        .unwrap();
+
+    result.sort_by_key(|v| {
+        if let QueryValue::Record(props) = v {
+            props
+                .get("department")
+                .unwrap()
+                .as_str_or_panic()
+                .to_string()
+        } else {
+            "const".to_string()
+        }
+    });
+
+    insta::assert_yaml_snapshot!(result);
+}
+
+#[test]
 fn test_query_top() {
     let mut db = Db::default();
 
