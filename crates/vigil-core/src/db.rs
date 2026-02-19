@@ -3,17 +3,15 @@ use std::{
     str::Split,
 };
 
-use eventql_parser::{
-    Query, Session,
-    prelude::{Type, Typed},
-};
+use eventql_parser::{Session, prelude::Type};
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     eval::EvalResult,
-    queries::{QueryProcessor, Sources, aggregates::AggQuery, events::EventQuery},
+    planner::{DataProvider, query_plan},
+    queries::QueryProcessor,
     values::QueryValue,
 };
 
@@ -290,17 +288,6 @@ pub struct Db {
     session: Session,
 }
 
-impl Default for Db {
-    fn default() -> Self {
-        Self {
-            types: Default::default(),
-            subjects: Default::default(),
-            events: vec![],
-            session: Session::builder().use_stdlib().build(),
-        }
-    }
-}
-
 impl Db {
     pub fn append(&mut self, subject: &str, events: Vec<Event>) -> Result<()> {
         if subject.starts_with('/') {
@@ -364,97 +351,55 @@ impl Db {
         let query = self.session.parse(query)?;
         let query = self.session.run_static_analysis(query)?;
 
-        Ok(self.catalog(query))
+        Ok(query_plan(&self.session, self, query))
     }
+}
 
-    fn catalog(&self, query: Query<Typed>) -> QueryProcessor<'_> {
-        let mut srcs = Sources::default();
-        for query_src in &query.sources {
-            match &query_src.kind {
-                eventql_parser::SourceKind::Name(name) => {
-                    let name = self.session.arena().get_str(*name);
-
-                    let proc = if let Some(tpe) = query.meta.scope.get(query_src.binding.name) {
-                        if name.eq_ignore_ascii_case("events") {
-                            QueryProcessor::generic(
-                                self.events
-                                    .iter()
-                                    .map(move |e| e.project(&self.session, tpe)),
-                            )
-                        } else if name.eq_ignore_ascii_case("eventtypes") {
-                            QueryProcessor::generic(
-                                self.types
-                                    .keys()
-                                    .map(|event_type| Ok(QueryValue::String(event_type.clone()))),
-                            )
-                        } else if name.eq_ignore_ascii_case("subjects") {
-                            QueryProcessor::generic(
-                                self.iter_subjects()
-                                    .map(|s| Ok(QueryValue::String(s.clone()))),
-                            )
-                        } else {
-                            QueryProcessor::empty()
-                        }
-                    } else {
-                        QueryProcessor::empty()
-                    };
-
-                    srcs.insert(query_src.binding.name, proc);
-                }
-
-                eventql_parser::SourceKind::Subject(path) => {
-                    if let Some(tpe) = query.meta.scope.get(query_src.binding.name) {
-                        let path = self.session.arena().get_str(*path);
-
-                        srcs.insert(
-                            query_src.binding.name,
-                            QueryProcessor::generic(
-                                self.iter_subject_events(path)
-                                    .map(move |e| e.project(&self.session, tpe)),
-                            ),
-                        );
-
-                        continue;
-                    }
-
-                    srcs.insert(query_src.binding.name, QueryProcessor::empty());
-                }
-
-                eventql_parser::SourceKind::Subquery(sub_query) => {
-                    let name = query_src.binding.name;
-                    // TODO - get rid of that unnecessary clone
-                    let row = self.catalog(sub_query.as_ref().clone());
-
-                    srcs.insert(name, row);
-                }
-            }
-        }
-
-        if query.meta.aggregate {
-            match AggQuery::new(srcs, &self.session, query) {
-                Ok(agg_query) => QueryProcessor::Aggregate(agg_query),
-                Err(e) => QueryProcessor::Errored(Some(e)),
-            }
-        } else {
-            QueryProcessor::Regular(EventQuery::new(srcs, &self.session, query))
+impl Default for Db {
+    fn default() -> Self {
+        Self {
+            types: Default::default(),
+            subjects: Default::default(),
+            events: vec![],
+            session: Session::builder().use_stdlib().build(),
         }
     }
 }
 
-// TODO - in due time
-// #[derive(Copy, Clone, Default)]
-// struct Consts {
-//     now: Option<DateTime<Utc>>,
-// }
+impl DataProvider for Db {
+    fn instantiate_named_data_source<'a>(
+        &'a self,
+        name: &'a str,
+        inferred_type: Type,
+    ) -> Option<QueryProcessor<'a>> {
+        if name.eq_ignore_ascii_case("events") {
+            Some(QueryProcessor::generic(
+                self.events
+                    .iter()
+                    .map(move |e| e.project(&self.session, inferred_type)),
+            ))
+        } else if name.eq_ignore_ascii_case("eventtypes") {
+            Some(QueryProcessor::generic(self.types.keys().map(
+                |event_type| Ok(QueryValue::String(event_type.clone())),
+            )))
+        } else if name.eq_ignore_ascii_case("subjects") {
+            Some(QueryProcessor::generic(
+                self.iter_subjects()
+                    .map(|s| Ok(QueryValue::String(s.clone()))),
+            ))
+        } else {
+            None
+        }
+    }
 
-// impl Consts {
-//     fn now(&mut self) -> DateTime<Utc> {
-//         if let Some(dt) = &self.now {
-//             return *dt;
-//         }
-
-//         let now = Utc::now();
-//         self.now = Some(now);
-//         now
-//     }
-// }
+    fn instantiate_subject_data_source<'a>(
+        &'a self,
+        subject: &'a str,
+        inferred_type: Type,
+    ) -> Option<QueryProcessor<'a>> {
+        Some(QueryProcessor::generic(
+            self.iter_subject_events(subject)
+                .map(move |e| e.project(&self.session, inferred_type)),
+        ))
+    }
+}
