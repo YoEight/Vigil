@@ -1,0 +1,9 @@
+---
+source: crates/vigil-core/src/databases/fs/tests/wal.rs
+expression: actual
+---
+Ok:
+  sealed: false
+  first_lsn: 123
+  last_lsn: 0
+  checksum: 0

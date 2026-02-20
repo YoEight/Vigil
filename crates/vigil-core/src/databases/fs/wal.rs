@@ -3,9 +3,14 @@ use std::{hash::Hash, mem};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::Serialize;
 
+use crate::databases::MB;
+
 pub const MAGIC_NUM: u32 = 0x57414C00;
 pub const VERSION: u16 = 0x01;
 pub const SEGMENT_HEADER_SIZE: usize = 128;
+pub const SEGMENT_FOOTER_SIZE: usize = 128;
+pub const SEGMENT_SIZE: usize = 256 * MB;
+
 pub const RECORD_MIN_SIZE: usize = mem::size_of::<u32>() // record len
      + mem::size_of::<u8>()
      + mem::size_of::<u8>()
@@ -14,20 +19,21 @@ pub const RECORD_MIN_SIZE: usize = mem::size_of::<u32>() // record len
      + mem::size_of::<u32>(); // record len
 
 #[derive(Serialize, Debug)]
-pub enum WalError {
+pub enum LogError {
     WrongFileFormat,
     TooSmall,
-    LenghMismatch,
+    LengthMismatch,
     ChecksumMismatch,
+    SegmentCorrupted,
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Serialize, Debug)]
-pub struct WalSegHeader {
+pub struct LogSegHeader {
     pub version: u16,
     pub segment_id: u64,
 }
 
-impl WalSegHeader {
+impl LogSegHeader {
     pub fn serialize_into(&self, buf: &mut BytesMut) {
         buf.reserve(SEGMENT_HEADER_SIZE);
         buf.put_u32_le(MAGIC_NUM);
@@ -36,13 +42,13 @@ impl WalSegHeader {
         buf.put_bytes(0, SEGMENT_HEADER_SIZE - buf.len());
     }
 
-    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, WalError> {
+    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
         if bytes.len() < SEGMENT_HEADER_SIZE {
-            return Err(WalError::TooSmall);
+            return Err(LogError::TooSmall);
         }
 
         if bytes.get_u32_le() != MAGIC_NUM {
-            return Err(WalError::WrongFileFormat);
+            return Err(LogError::WrongFileFormat);
         }
 
         let version = bytes.get_u16_le();
@@ -55,14 +61,87 @@ impl WalSegHeader {
     }
 }
 
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize)]
+pub struct LogSegFooter {
+    pub sealed: bool,
+    pub first_lsn: u64,
+    pub last_lsn: u64,
+    pub checksum: u32,
+}
+
+impl LogSegFooter {
+    pub fn new(first_lsn: u64) -> Self {
+        Self {
+            sealed: false,
+            first_lsn,
+            last_lsn: 0,
+            checksum: 0,
+        }
+    }
+
+    pub fn serialize_into(&self, buf: &mut BytesMut) {
+        buf.reserve(SEGMENT_FOOTER_SIZE);
+        let prefix = mem::size_of::<u32>() + mem::size_of::<u8>() + 2 * mem::size_of::<u64>();
+
+        buf.put_u32_le(MAGIC_NUM);
+        buf.put_u8(if self.sealed { 0x01 } else { 0x00 });
+        buf.put_u64_le(self.first_lsn);
+
+        if self.sealed {
+            buf.put_u64_le(self.last_lsn);
+            buf.put_bytes(0, SEGMENT_FOOTER_SIZE - (prefix + mem::size_of::<u32>()));
+            buf.put_u32_le(self.checksum);
+        } else {
+            buf.put_u64_le(0);
+            buf.put_bytes(0, SEGMENT_FOOTER_SIZE - (prefix + mem::size_of::<u32>()));
+            buf.put_u32_le(0);
+        }
+    }
+
+    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
+        if bytes.remaining() < SEGMENT_FOOTER_SIZE {
+            return Err(LogError::TooSmall);
+        }
+
+        let mut checksum_part =
+            bytes.slice(SEGMENT_FOOTER_SIZE - mem::size_of::<u32>()..SEGMENT_FOOTER_SIZE);
+
+        if bytes.get_u32_le() != MAGIC_NUM {
+            return Err(LogError::WrongFileFormat);
+        }
+
+        let sealed = match bytes.get_u8() {
+            0x00 => false,
+            0x01 => true,
+            _ => return Err(LogError::WrongFileFormat),
+        };
+
+        let first_lsn = bytes.get_u64_le();
+        let mut last_lsn = 0u64;
+        let mut checksum = 0u32;
+
+        if sealed {
+            last_lsn = bytes.get_u64_le();
+            checksum = checksum_part.get_u32_le();
+        }
+
+        Ok(Self {
+            sealed,
+            first_lsn,
+            last_lsn,
+            checksum,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-pub enum WalOp {
+pub enum LogOp {
     Unknown(u8),
     Put,
     Delete,
 }
 
-impl From<u8> for WalOp {
+impl From<u8> for LogOp {
     fn from(value: u8) -> Self {
         match value {
             0x01 => Self::Put,
@@ -72,32 +151,32 @@ impl From<u8> for WalOp {
     }
 }
 
-impl From<WalOp> for u8 {
-    fn from(value: WalOp) -> Self {
+impl From<LogOp> for u8 {
+    fn from(value: LogOp) -> Self {
         match value {
-            WalOp::Unknown(x) => x,
-            WalOp::Put => 0x01,
-            WalOp::Delete => 0x02,
+            LogOp::Unknown(x) => x,
+            LogOp::Put => 0x01,
+            LogOp::Delete => 0x02,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-pub enum WalContentType {
+pub enum LogContentType {
     Unknown(u8),
     Json,
 }
 
-impl From<WalContentType> for u8 {
-    fn from(value: WalContentType) -> Self {
+impl From<LogContentType> for u8 {
+    fn from(value: LogContentType) -> Self {
         match value {
-            WalContentType::Unknown(x) => x,
-            WalContentType::Json => 0x01,
+            LogContentType::Unknown(x) => x,
+            LogContentType::Json => 0x01,
         }
     }
 }
 
-impl From<u8> for WalContentType {
+impl From<u8> for LogContentType {
     fn from(value: u8) -> Self {
         match value {
             0x01 => Self::Json,
@@ -107,14 +186,14 @@ impl From<u8> for WalContentType {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
-pub struct WalRecord {
+pub struct LogRecord {
     pub lsn: u64,
-    pub op: WalOp,
-    pub content_type: WalContentType,
+    pub op: LogOp,
+    pub content_type: LogContentType,
     pub data: Bytes,
 }
 
-impl WalRecord {
+impl LogRecord {
     pub fn size_on_disk(&self) -> usize {
         mem::size_of::<u32>() // frame len
           + mem::size_of::<u64>() // lsn
@@ -141,9 +220,9 @@ impl WalRecord {
         buf.put_u32_le(len);
     }
 
-    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, WalError> {
+    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
         if bytes.len() < RECORD_MIN_SIZE {
-            return Err(WalError::TooSmall);
+            return Err(LogError::TooSmall);
         }
 
         let content = bytes.clone();
@@ -163,13 +242,13 @@ impl WalRecord {
             + data.len();
 
         if checksum != crc32fast::hash(&content[mem::size_of::<u32>()..leading_offset]) {
-            return Err(WalError::ChecksumMismatch);
+            return Err(LogError::ChecksumMismatch);
         }
 
         let suf_len = bytes.get_u32_le();
 
         if pre_len != suf_len {
-            return Err(WalError::LenghMismatch);
+            return Err(LogError::LengthMismatch);
         }
 
         Ok(Self {
@@ -182,39 +261,86 @@ impl WalRecord {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct WalSegment {
-    pub header: WalSegHeader,
+pub struct LogSegment {
+    pub header: LogSegHeader,
+    pub footer: LogSegFooter,
 }
 
-impl Hash for WalSegment {
+impl LogSegment {
+    pub fn first_lsn(&self) -> u64 {
+        self.footer.first_lsn
+    }
+
+    pub fn last_lsn(&self) -> Option<u64> {
+        if self.is_sealed() {
+            return Some(self.footer.last_lsn);
+        }
+
+        None
+    }
+
+    pub fn is_sealed(&self) -> bool {
+        self.footer.sealed
+    }
+}
+
+impl Hash for LogSegment {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.header.segment_id.hash(state);
     }
 }
 
-impl PartialEq for WalSegment {
+impl PartialEq for LogSegment {
     fn eq(&self, other: &Self) -> bool {
         self.header.segment_id == other.header.segment_id
     }
 }
 
-impl Eq for WalSegment {}
+impl Eq for LogSegment {}
 
-impl PartialOrd for WalSegment {
+impl PartialOrd for LogSegment {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.header.segment_id.partial_cmp(&other.header.segment_id)
     }
 }
 
-impl Ord for WalSegment {
+impl Ord for LogSegment {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.header.segment_id.cmp(&other.header.segment_id)
     }
 }
 
-pub struct WalSegmentWriter {
-    segment: WalSegment,
+pub struct LogSegmentWriter {
+    segment: LogSegment,
     buf: BytesMut,
+    cached_offset: usize,
+    last_lsn: Option<u64>,
 }
 
-impl WalSegmentWriter {}
+impl LogSegmentWriter {
+    pub fn available_space(&self) -> usize {
+        SEGMENT_SIZE
+            - (self.cached_offset + self.buf.len() + SEGMENT_HEADER_SIZE + SEGMENT_FOOTER_SIZE)
+    }
+
+    pub fn append(&mut self, record: &LogRecord) -> Option<u32> {
+        if self.segment.is_sealed() {
+            return None;
+        }
+
+        if self.available_space() < record.size_on_disk() {
+            self.seal();
+            return None;
+        }
+
+        let offset = self.buf.len();
+        record.serialize_into(&mut self.buf);
+        self.last_lsn = Some(record.lsn);
+
+        Some(offset as u32)
+    }
+
+    fn seal(&mut self) {
+        todo!()
+    }
+}
