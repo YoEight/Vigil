@@ -49,5 +49,5 @@ PROJECT INTO {
 
 Apache 2.0
 
-[ci-badge]: https://github.com/YoEight/Vigil/workflows/CI/badge.svg
+[ci-badge]: https://github.com/YoEight/Vigil/workflows/CI/badge.svg?branch=master
 [ci-url]: https://github.com/YoEight/Vigil/actions
