@@ -1,6 +1,7 @@
 use std::mem;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use serde::Serialize;
 
 pub const MAGIC_NUM: u32 = 0x57414C00;
 pub const VERSION: u16 = 0x01;
@@ -12,6 +13,7 @@ pub const RECORD_MIN_SIZE: usize = mem::size_of::<u32>() // record len
      + mem::size_of::<u32>() // CRC 32
      + mem::size_of::<u32>(); // record len
 
+#[derive(Serialize, Debug)]
 pub enum WalError {
     WrongFileFormat,
     TooSmall,
@@ -19,6 +21,7 @@ pub enum WalError {
     ChecksumMismatch,
 }
 
+#[derive(PartialEq, Eq, Copy, Clone, Serialize, Debug)]
 pub struct WalSegHeader {
     pub version: u16,
     pub segment_id: u64,
@@ -30,7 +33,7 @@ impl WalSegHeader {
         buf.put_u32_le(MAGIC_NUM);
         buf.put_u16_le(self.version);
         buf.put_u64_le(self.segment_id);
-        buf.advance(SEGMENT_HEADER_SIZE - buf.len());
+        buf.put_bytes(0, SEGMENT_HEADER_SIZE - buf.len());
     }
 
     pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, WalError> {
@@ -52,7 +55,7 @@ impl WalSegHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub enum WalOp {
     Unknown(u8),
     Put,
@@ -79,7 +82,7 @@ impl From<WalOp> for u8 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub enum WalContentType {
     Unknown(u8),
     Json,
@@ -103,7 +106,7 @@ impl From<u8> for WalContentType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct WalRecord {
     pub lsn: u64,
     pub op: WalOp,
@@ -131,6 +134,7 @@ impl WalRecord {
         buf.put_u8(self.op.into());
         buf.put_u8(self.content_type.into());
         buf.put_u16_le(self.data.len() as u16);
+        buf.put_slice(self.data.as_ref());
 
         let checksum = crc32fast::hash(&buf[mem::size_of::<u32>()..]);
         buf.put_u32_le(checksum);
@@ -151,10 +155,8 @@ impl WalRecord {
         let data_len = bytes.get_u16_le();
         let data = bytes.copy_to_bytes(data_len as usize);
         let checksum = bytes.get_u32_le();
-        let leading_offset = mem::size_of::<WalOp>()
-            + mem::size_of::<WalContentType>()
-            + mem::size_of::<u16>()
-            + data.len();
+        let leading_offset =
+            mem::size_of::<u8>() + mem::size_of::<u8>() + mem::size_of::<u16>() + data.len();
 
         if checksum != crc32fast::hash(&content[mem::size_of::<u32>()..leading_offset]) {
             return Err(WalError::ChecksumMismatch);
