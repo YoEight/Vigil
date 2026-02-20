@@ -1,13 +1,9 @@
 use serde::Deserialize;
 use uuid::uuid;
 
-use crate::{
-    db::{Db, Event},
-    eval::EvalResult,
-    values::QueryValue,
-};
+use crate::{databases::in_mem::InMemDb, eval::EvalResult, types::Event, values::QueryValue};
 
-fn load_departments_dataset(db: &mut Db) {
+fn load_departments_dataset(db: &mut InMemDb) {
     #[derive(Deserialize)]
     struct Propose {
         subject: String,
@@ -35,7 +31,7 @@ fn load_departments_dataset(db: &mut Db) {
 
 #[test]
 fn test_append() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
     insta::assert_yaml_snapshot!(db.append(
         "foo/bar",
         vec![Event {
@@ -47,7 +43,7 @@ fn test_append() {
 
 #[test]
 fn test_illegal_subject() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
     insta::assert_yaml_snapshot!(db.append(
         "/path/to/file",
         vec![Event {
@@ -59,7 +55,7 @@ fn test_illegal_subject() {
 
 #[test]
 fn test_run_query_from_events() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     db.append(
         "companies/krispy",
@@ -90,7 +86,7 @@ fn test_run_query_from_events() {
 
 #[test]
 fn test_run_query_department_grouping() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -117,7 +113,7 @@ fn test_run_query_department_grouping() {
 
 #[test]
 fn test_run_query_department_grouping_ordered() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -129,7 +125,7 @@ fn test_run_query_department_grouping_ordered() {
 }
 #[test]
 fn test_run_query_department_grouping_having() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -142,7 +138,7 @@ fn test_run_query_department_grouping_having() {
 
 #[test]
 fn test_query_order_by() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -155,7 +151,7 @@ fn test_query_order_by() {
 
 #[test]
 fn test_query_order_by_desc() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -168,7 +164,7 @@ fn test_query_order_by_desc() {
 
 #[test]
 fn test_query_event_types() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -181,7 +177,7 @@ fn test_query_event_types() {
 
 #[test]
 fn test_query_subjects() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -194,7 +190,7 @@ fn test_query_subjects() {
 
 #[test]
 fn test_query_agg_distinct() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -207,7 +203,7 @@ fn test_query_agg_distinct() {
 
 #[test]
 fn test_query_distinct() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -220,7 +216,7 @@ fn test_query_distinct() {
 
 #[test]
 fn test_query_agg_functions() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -247,7 +243,7 @@ fn test_query_agg_functions() {
 
 #[test]
 fn test_query_top() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -260,7 +256,7 @@ fn test_query_top() {
 
 #[test]
 fn test_query_skip() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -273,7 +269,7 @@ fn test_query_skip() {
 
 #[test]
 fn test_query_agg_top() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -286,7 +282,7 @@ fn test_query_agg_top() {
 
 #[test]
 fn test_query_agg_skip() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
@@ -299,7 +295,7 @@ fn test_query_agg_skip() {
 
 #[test]
 fn test_simple_sub_query() {
-    let mut db = Db::default();
+    let mut db = InMemDb::default();
 
     load_departments_dataset(&mut db);
 
