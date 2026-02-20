@@ -1,4 +1,4 @@
-use std::mem;
+use std::{hash::Hash, mem};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::Serialize;
@@ -178,5 +178,36 @@ impl WalRecord {
             content_type,
             data,
         })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct WalSegment {
+    pub header: WalSegHeader,
+}
+
+impl Hash for WalSegment {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.header.segment_id.hash(state);
+    }
+}
+
+impl PartialEq for WalSegment {
+    fn eq(&self, other: &Self) -> bool {
+        self.header.segment_id == other.header.segment_id
+    }
+}
+
+impl Eq for WalSegment {}
+
+impl PartialOrd for WalSegment {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.header.segment_id.partial_cmp(&other.header.segment_id)
+    }
+}
+
+impl Ord for WalSegment {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.header.segment_id.cmp(&other.header.segment_id)
     }
 }
