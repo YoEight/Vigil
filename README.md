@@ -1,4 +1,4 @@
-[![Build Status][ci-badge]][ci-url]
+[![CI](https://github.com/YoEight/Vigil/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/YoEight/Vigil/actions/workflows/ci.yml)
 
 # Vigil
 
@@ -48,6 +48,3 @@ PROJECT INTO {
 ## License
 
 Apache 2.0
-
-[ci-badge]: https://github.com/YoEight/Vigil/workflows/CI/badge.svg?branch=master
-[ci-url]: https://github.com/YoEight/Vigil/actions
