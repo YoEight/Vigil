@@ -155,8 +155,12 @@ impl WalRecord {
         let data_len = bytes.get_u16_le();
         let data = bytes.copy_to_bytes(data_len as usize);
         let checksum = bytes.get_u32_le();
-        let leading_offset =
-            mem::size_of::<u8>() + mem::size_of::<u8>() + mem::size_of::<u16>() + data.len();
+        let leading_offset = mem::size_of::<u32>()
+            + mem::size_of::<u64>()
+            + mem::size_of::<u8>()
+            + mem::size_of::<u8>()
+            + mem::size_of::<u16>()
+            + data.len();
 
         if checksum != crc32fast::hash(&content[mem::size_of::<u32>()..leading_offset]) {
             return Err(WalError::ChecksumMismatch);
