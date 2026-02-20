@@ -12,6 +12,8 @@ serde_json = "1"
 thiserror = "2"
 rand = "0.9"
 case_insensitive_hashmap = "1"
+bytes = "1"
+crc32fast = "1"
 
 [dependencies.uuid]
 version = "1"

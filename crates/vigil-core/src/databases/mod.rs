@@ -1,6 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
+pub mod fs;
 pub mod in_mem;
 
 #[derive(Debug, Error, Serialize)]
