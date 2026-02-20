@@ -124,6 +124,7 @@ impl WalRecord {
     }
 
     pub fn serialize_into(&self, buf: &mut BytesMut) {
+        buf.reserve(self.size_on_disk());
         let len = self.size_on_disk() as u32;
         buf.put_u32_le(len);
         buf.put_u64_le(self.lsn);
