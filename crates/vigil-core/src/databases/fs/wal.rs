@@ -211,3 +211,10 @@ impl Ord for WalSegment {
         self.header.segment_id.cmp(&other.header.segment_id)
     }
 }
+
+pub struct WalSegmentWriter {
+    segment: WalSegment,
+    buf: BytesMut,
+}
+
+impl WalSegmentWriter {}
