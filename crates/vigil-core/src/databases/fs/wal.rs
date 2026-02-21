@@ -9,7 +9,7 @@ use crate::databases::{
 };
 
 pub const MAGIC_NUM: u32 = 0x57414C00;
-pub const VERSION: u16 = 0x01;
+pub const SEGMENT_VERSION: u16 = 0x01;
 pub const SEGMENT_HEADER_SIZE: usize = 128;
 pub const SEGMENT_FOOTER_SIZE: usize = 128;
 pub const SEGMENT_SIZE: usize = 256 * MB;
@@ -258,6 +258,22 @@ pub struct LogSegment {
 }
 
 impl LogSegment {
+    pub fn new(segment_id: u64) -> Self {
+        Self {
+            header: LogSegHeader {
+                version: SEGMENT_VERSION,
+                segment_id,
+            },
+
+            footer: LogSegFooter {
+                sealed: false,
+                first_lsn: u64::MAX,
+                last_lsn: u64::MAX,
+                checksum: u32::MAX,
+            },
+        }
+    }
+
     pub fn first_lsn(&self) -> u64 {
         self.footer.first_lsn
     }

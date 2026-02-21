@@ -2,7 +2,7 @@ use bytes::{Bytes, BytesMut};
 
 use crate::databases::fs::{
     blocks::BlocksMut,
-    wal::{LogContentType, LogOp, LogRecord, LogSegFooter, LogSegHeader},
+    wal::{LogContentType, LogOp, LogRecord, LogSegFooter, LogSegHeader, LogSegment},
 };
 
 #[test]
@@ -112,4 +112,45 @@ fn detect_written_too_little() {
     buf.put_u32_le(123).unwrap();
 
     insta::assert_yaml_snapshot!(buf.finalize());
+}
+
+#[test]
+fn detect_segment_is_sealed() {
+    let segment = LogSegment {
+        header: LogSegHeader {
+            version: 1,
+            segment_id: 2,
+        },
+
+        footer: LogSegFooter {
+            sealed: true,
+            first_lsn: 1,
+            last_lsn: 2,
+            checksum: 3,
+        },
+    };
+
+    let blocks = BlocksMut::new(37, 0, BytesMut::new());
+
+    assert!(segment.writer(blocks).is_none());
+}
+
+#[test]
+fn detect_segment_is_full() {
+    let segment = LogSegment::new(0);
+    let blocks = BlocksMut::new(37, 0, BytesMut::new());
+
+    let data = Bytes::from_static(&b"Hello, World!"[..]);
+
+    let record = LogRecord {
+        lsn: 42,
+        op: LogOp::Put,
+        content_type: LogContentType::Unknown(123),
+        data: data.clone(),
+    };
+
+    let mut writer = segment.writer(blocks).unwrap();
+    writer.append(&record).unwrap();
+
+    insta::assert_yaml_snapshot!(writer.append(&record));
 }
