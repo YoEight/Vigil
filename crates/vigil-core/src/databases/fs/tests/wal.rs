@@ -77,3 +77,37 @@ fn footer_serialization_when_not_sealed() {
 
     insta::assert_yaml_snapshot!("parsed_footer", actual);
 }
+
+#[test]
+fn detect_not_enough_space_zero_offset() {
+    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+
+    insta::assert_yaml_snapshot!(blocks.open(129));
+}
+
+#[test]
+fn detect_not_enough_space_with_offset() {
+    let mut blocks = BlocksMut::new(128, 64, BytesMut::new());
+
+    insta::assert_yaml_snapshot!(blocks.open(64));
+}
+
+#[test]
+fn detect_written_too_much() {
+    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+
+    let mut buf = blocks.open(5).unwrap();
+
+    insta::assert_yaml_snapshot!(buf.put_u64_le(123));
+}
+
+#[test]
+fn detect_written_too_little() {
+    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+
+    let mut buf = blocks.open(8).unwrap();
+
+    buf.put_u32_le(123).unwrap();
+
+    insta::assert_yaml_snapshot!(buf.finalize());
+}

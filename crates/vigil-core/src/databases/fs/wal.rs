@@ -321,13 +321,6 @@ impl Ord for LogSegment {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub enum AppendOutcome {
-    Success(u32),
-    Sealed,
-    NeedSealing,
-}
-
 pub struct LogSegmentWriter {
     blocks: BlocksMut,
     cached_last_lsn: Option<u64>,

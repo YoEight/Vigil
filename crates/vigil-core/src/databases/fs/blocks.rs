@@ -3,11 +3,11 @@ use std::{io, mem};
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::Serialize;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum BlockError {
     OutOfSpace,
     WroteTooMuch,
-    WroteLessThanExpected,
+    WroteTooLittle,
 }
 
 pub type Result<A> = std::result::Result<A, BlockError>;
@@ -26,6 +26,7 @@ impl Blocks {
     }
 }
 
+#[derive(Serialize)]
 pub struct BlocksMut {
     limit: usize,
     offset: usize,
@@ -71,6 +72,7 @@ impl BlocksMut {
     }
 }
 
+#[derive(Serialize)]
 pub struct OpenedBlock<'a> {
     need: usize,
     start_offset: usize,
@@ -78,6 +80,7 @@ pub struct OpenedBlock<'a> {
     inner: &'a mut BlocksMut,
 }
 
+#[derive(Serialize)]
 pub struct ClosedBlock(());
 
 impl OpenedBlock<'_> {
@@ -159,7 +162,7 @@ impl OpenedBlock<'_> {
 
     pub fn finalize(self) -> Result<ClosedBlock> {
         if self.written < self.need {
-            return Err(BlockError::WroteLessThanExpected);
+            return Err(BlockError::WroteTooLittle);
         }
 
         self.inner.buf.put_u32_le(self.need as u32);
