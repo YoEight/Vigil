@@ -3,7 +3,10 @@ use std::{hash::Hash, mem};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::Serialize;
 
-use crate::databases::MB;
+use crate::databases::{
+    MB,
+    fs::blocks::{self, BlocksMut, ClosedBlock},
+};
 
 pub const MAGIC_NUM: u32 = 0x57414C00;
 pub const VERSION: u16 = 0x01;
@@ -195,29 +198,26 @@ pub struct LogRecord {
 
 impl LogRecord {
     pub fn size_on_disk(&self) -> usize {
-        mem::size_of::<u32>() // frame len
-          + mem::size_of::<u64>() // lsn
+        mem::size_of::<u64>() // lsn
           + mem::size_of::<u8>() // wal op
           + mem::size_of::<u8>() // content type
           + mem::size_of::<u16>() // data len
           + self.data.len()
           + mem::size_of::<u32>() // CRC 32
-          + mem::size_of::<u32>() // frame len
     }
 
-    pub fn serialize_into(&self, buf: &mut BytesMut) {
-        buf.reserve(self.size_on_disk());
-        let len = self.size_on_disk() as u32;
-        buf.put_u32_le(len);
-        buf.put_u64_le(self.lsn);
-        buf.put_u8(self.op.into());
-        buf.put_u8(self.content_type.into());
-        buf.put_u16_le(self.data.len() as u16);
-        buf.put_slice(self.data.as_ref());
+    pub fn serialize_into(&self, blocks: &mut BlocksMut) -> blocks::Result<ClosedBlock> {
+        let mut buf = blocks.open(self.size_on_disk())?;
+        buf.put_u64_le(self.lsn)?;
+        buf.put_u8(self.op.into())?;
+        buf.put_u8(self.content_type.into())?;
+        buf.put_u16_le(self.data.len() as u16)?;
+        buf.put_bytes(self.data.clone())?;
 
-        let checksum = crc32fast::hash(&buf[mem::size_of::<u32>()..]);
-        buf.put_u32_le(checksum);
-        buf.put_u32_le(len);
+        let checksum = crc32fast::hash(buf.written_bytes());
+        buf.put_u32_le(checksum)?;
+
+        buf.finalize()
     }
 
     pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
@@ -282,6 +282,17 @@ impl LogSegment {
     pub fn is_sealed(&self) -> bool {
         self.footer.sealed
     }
+
+    pub fn writer(&self, blocks: BlocksMut) -> Option<LogSegmentWriter> {
+        if self.is_sealed() {
+            return None;
+        }
+
+        Some(LogSegmentWriter {
+            blocks,
+            cached_last_lsn: None,
+        })
+    }
 }
 
 impl Hash for LogSegment {
@@ -310,37 +321,31 @@ impl Ord for LogSegment {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub enum AppendOutcome {
+    Success(u32),
+    Sealed,
+    NeedSealing,
+}
+
 pub struct LogSegmentWriter {
-    segment: LogSegment,
-    buf: BytesMut,
-    cached_offset: usize,
-    last_lsn: Option<u64>,
+    blocks: BlocksMut,
+    cached_last_lsn: Option<u64>,
 }
 
 impl LogSegmentWriter {
-    pub fn available_space(&self) -> usize {
-        SEGMENT_SIZE
-            - (self.cached_offset + self.buf.len() + SEGMENT_HEADER_SIZE + SEGMENT_FOOTER_SIZE)
+    pub fn cached_last_lsn(&self) -> Option<u64> {
+        self.cached_last_lsn
     }
 
-    pub fn append(&mut self, record: &LogRecord) -> Option<u32> {
-        if self.segment.is_sealed() {
-            return None;
-        }
+    pub fn append(&mut self, record: &LogRecord) -> blocks::Result<u32> {
+        record.serialize_into(&mut self.blocks)?;
+        self.cached_last_lsn = Some(record.lsn);
 
-        if self.available_space() < record.size_on_disk() {
-            self.seal();
-            return None;
-        }
-
-        let offset = self.buf.len();
-        record.serialize_into(&mut self.buf);
-        self.last_lsn = Some(record.lsn);
-
-        Some(offset as u32)
+        Ok(self.blocks.projected_offset())
     }
 
-    fn seal(&mut self) {
-        todo!()
+    pub fn finalize(self) -> BlocksMut {
+        self.blocks
     }
 }

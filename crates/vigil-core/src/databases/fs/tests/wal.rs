@@ -1,6 +1,9 @@
 use bytes::{Bytes, BytesMut};
 
-use crate::databases::fs::wal::{LogContentType, LogOp, LogRecord, LogSegFooter, LogSegHeader};
+use crate::databases::fs::{
+    blocks::BlocksMut,
+    wal::{LogContentType, LogOp, LogRecord, LogSegFooter, LogSegHeader},
+};
 
 #[test]
 fn seg_header_round_trip() {
@@ -22,7 +25,7 @@ fn seg_header_round_trip() {
 #[test]
 fn rec_round_trip() {
     let data = Bytes::from_static(&b"Hello, World!"[..]);
-    let mut buf = BytesMut::new();
+    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
 
     let expected = LogRecord {
         lsn: 42,
@@ -31,10 +34,10 @@ fn rec_round_trip() {
         data,
     };
 
-    expected.serialize_into(&mut buf);
-    insta::assert_yaml_snapshot!(buf);
+    expected.serialize_into(&mut blocks).unwrap();
+    insta::assert_yaml_snapshot!(blocks.bytes_mut());
 
-    let actual = LogRecord::try_deserialize_from(buf.freeze()).unwrap();
+    let actual = LogRecord::try_deserialize_from(blocks.bytes_mut().split().freeze()).unwrap();
 
     assert_eq!(expected, actual);
 }

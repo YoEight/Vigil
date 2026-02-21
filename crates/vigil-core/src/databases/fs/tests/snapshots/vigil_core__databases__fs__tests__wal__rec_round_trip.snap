@@ -1,8 +1,8 @@
 ---
 source: crates/vigil-core/src/databases/fs/tests/wal.rs
-expression: buf
+expression: blocks.bytes_mut()
 ---
-- 37
+- 29
 - 0
 - 0
 - 0
@@ -35,7 +35,7 @@ expression: buf
 - 81
 - 167
 - 248
-- 37
+- 29
 - 0
 - 0
 - 0
