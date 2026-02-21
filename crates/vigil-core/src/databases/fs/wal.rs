@@ -14,12 +14,10 @@ pub const SEGMENT_HEADER_SIZE: usize = 128;
 pub const SEGMENT_FOOTER_SIZE: usize = 128;
 pub const SEGMENT_SIZE: usize = 256 * MB;
 
-pub const RECORD_MIN_SIZE: usize = mem::size_of::<u32>() // record len
-     + mem::size_of::<u8>()
+pub const RECORD_MIN_SIZE: usize = mem::size_of::<u8>()
      + mem::size_of::<u8>()
      + mem::size_of::<u16>() // data len
-     + mem::size_of::<u32>() // CRC 32
-     + mem::size_of::<u32>(); // record len
+     + mem::size_of::<u32>(); // CRC 32
 
 #[derive(Serialize, Debug)]
 pub enum LogError {
@@ -304,7 +302,7 @@ impl Eq for LogSegment {}
 
 impl PartialOrd for LogSegment {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.header.segment_id.partial_cmp(&other.header.segment_id)
+        Some(self.cmp(other))
     }
 }
 
