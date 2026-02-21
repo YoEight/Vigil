@@ -37,7 +37,9 @@ fn rec_round_trip() {
     expected.serialize_into(&mut blocks).unwrap();
     insta::assert_yaml_snapshot!(blocks.bytes_mut());
 
-    let actual = LogRecord::try_deserialize_from(blocks.bytes_mut().split().freeze()).unwrap();
+    let mut blocks = blocks.freeze();
+    let block = blocks.next_block().unwrap().unwrap();
+    let actual = LogRecord::try_deserialize_from(block).unwrap();
 
     assert_eq!(expected, actual);
 }

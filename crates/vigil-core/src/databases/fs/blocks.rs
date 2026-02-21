@@ -1,6 +1,6 @@
-use std::{io, mem};
+use std::mem;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -8,6 +8,8 @@ pub enum BlockError {
     OutOfSpace,
     WroteTooMuch,
     WroteTooLittle,
+    InvalidBlockFormat,
+    NotEnoughDataLeft,
 }
 
 pub type Result<A> = std::result::Result<A, BlockError>;
@@ -15,14 +17,119 @@ pub type Result<A> = std::result::Result<A, BlockError>;
 #[derive(Debug, Clone, Serialize)]
 pub struct Block {
     pub offset: usize,
+    pub read: usize,
     pub data: Bytes,
 }
 
-pub struct Blocks {}
+impl Block {
+    pub fn get_u64_le(&mut self) -> Result<u64> {
+        if self.data.remaining() < self.read + mem::size_of::<u64>() {
+            return Err(BlockError::NotEnoughDataLeft);
+        }
+
+        let value = (&self.data[self.read..(self.read + mem::size_of::<u64>())]).get_u64_le();
+        self.read += mem::size_of::<u64>();
+
+        Ok(value)
+    }
+
+    pub fn get_u32_le(&mut self) -> Result<u32> {
+        if self.data.remaining() < self.read + mem::size_of::<u32>() {
+            return Err(BlockError::NotEnoughDataLeft);
+        }
+
+        let value = (&self.data[self.read..(self.read + mem::size_of::<u32>())]).get_u32_le();
+        self.read += mem::size_of::<u32>();
+
+        Ok(value)
+    }
+
+    pub fn get_u16_le(&mut self) -> Result<u16> {
+        if self.data.remaining() < self.read + mem::size_of::<u16>() {
+            return Err(BlockError::NotEnoughDataLeft);
+        }
+
+        let value = (&self.data[self.read..(self.read + mem::size_of::<u16>())]).get_u16_le();
+        self.read += mem::size_of::<u16>();
+
+        Ok(value)
+    }
+
+    pub fn get_u8(&mut self) -> Result<u8> {
+        if self.data.remaining() < self.read + mem::size_of::<u8>() {
+            return Err(BlockError::NotEnoughDataLeft);
+        }
+
+        let value = (&self.data[self.read..(self.read + mem::size_of::<u8>())]).get_u8();
+        self.read += mem::size_of::<u8>();
+
+        Ok(value)
+    }
+
+    pub fn copy_to_bytes(&mut self, cnt: usize) -> Result<Bytes> {
+        if self.data.remaining() < self.read + cnt {
+            return Err(BlockError::NotEnoughDataLeft);
+        }
+
+        let bytes = self.data.clone().split_off(self.read).copy_to_bytes(cnt);
+
+        self.read += cnt;
+
+        Ok(bytes)
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.data
+            .remaining()
+            .checked_sub(self.read)
+            .unwrap_or_default()
+    }
+
+    pub fn read_content(&self) -> Bytes {
+        self.data.clone().split_to(self.read)
+    }
+}
+
+pub struct Blocks {
+    start_offset: usize,
+    read: usize,
+    bytes: Bytes,
+}
 
 impl Blocks {
-    pub fn next(&mut self) -> io::Result<Option<Block>> {
-        todo!()
+    pub fn new(start_offset: usize, bytes: Bytes) -> Self {
+        Self {
+            start_offset,
+            read: 0,
+            bytes,
+        }
+    }
+
+    pub fn next_block(&mut self) -> Result<Option<Block>> {
+        if self.bytes.remaining() < mem::size_of::<u32>() {
+            return Ok(None);
+        }
+
+        let local_offset = self.read;
+        let prefix = self.bytes.get_u32_le() as usize;
+
+        if self.bytes.remaining() < prefix + mem::size_of::<u32>() {
+            return Err(BlockError::InvalidBlockFormat);
+        }
+
+        let data = self.bytes.copy_to_bytes(prefix);
+        let suffix = self.bytes.get_u32_le() as usize;
+        if prefix != suffix {
+            return Err(BlockError::InvalidBlockFormat);
+        }
+
+        self.read += prefix + 2 * mem::size_of::<u32>();
+
+        Ok(Some(Block {
+            offset: self.start_offset + local_offset,
+            read: 0,
+            data,
+        }))
     }
 }
 
@@ -69,6 +176,15 @@ impl BlocksMut {
     #[cfg(test)]
     pub fn bytes_mut(&mut self) -> &mut BytesMut {
         &mut self.buf
+    }
+
+    #[cfg(test)]
+    pub fn freeze(self) -> Blocks {
+        Blocks {
+            start_offset: self.offset,
+            read: 0,
+            bytes: self.buf.freeze(),
+        }
     }
 }
 

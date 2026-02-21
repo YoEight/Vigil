@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::databases::{
     MB,
-    fs::blocks::{self, BlocksMut, ClosedBlock},
+    fs::blocks::{self, Block, BlocksMut, ClosedBlock},
 };
 
 pub const MAGIC_NUM: u32 = 0x57414C00;
@@ -28,6 +28,13 @@ pub enum LogError {
     LengthMismatch,
     ChecksumMismatch,
     SegmentCorrupted,
+    BlockError(blocks::BlockError),
+}
+
+impl From<blocks::BlockError> for LogError {
+    fn from(value: blocks::BlockError) -> Self {
+        Self::BlockError(value)
+    }
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Serialize, Debug)]
@@ -220,35 +227,21 @@ impl LogRecord {
         buf.finalize()
     }
 
-    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
-        if bytes.len() < RECORD_MIN_SIZE {
+    pub fn try_deserialize_from(mut bytes: Block) -> Result<Self, LogError> {
+        if bytes.remaining() < RECORD_MIN_SIZE {
             return Err(LogError::TooSmall);
         }
 
-        let content = bytes.clone();
+        let lsn = bytes.get_u64_le()?;
+        let op = bytes.get_u8()?.into();
+        let content_type = bytes.get_u8()?.into();
+        let data_len = bytes.get_u16_le()?;
+        let data = bytes.copy_to_bytes(data_len as usize)?;
+        let content = bytes.read_content();
+        let checksum = bytes.get_u32_le()?;
 
-        let pre_len = bytes.get_u32_le();
-        let lsn = bytes.get_u64_le();
-        let op = bytes.get_u8().into();
-        let content_type = bytes.get_u8().into();
-        let data_len = bytes.get_u16_le();
-        let data = bytes.copy_to_bytes(data_len as usize);
-        let checksum = bytes.get_u32_le();
-        let leading_offset = mem::size_of::<u32>()
-            + mem::size_of::<u64>()
-            + mem::size_of::<u8>()
-            + mem::size_of::<u8>()
-            + mem::size_of::<u16>()
-            + data.len();
-
-        if checksum != crc32fast::hash(&content[mem::size_of::<u32>()..leading_offset]) {
+        if checksum != crc32fast::hash(content.as_ref()) {
             return Err(LogError::ChecksumMismatch);
-        }
-
-        let suf_len = bytes.get_u32_le();
-
-        if pre_len != suf_len {
-            return Err(LogError::LengthMismatch);
         }
 
         Ok(Self {
