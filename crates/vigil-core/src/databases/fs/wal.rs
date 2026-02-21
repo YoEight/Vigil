@@ -3,6 +3,7 @@ use std::{hash::Hash, mem};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::Serialize;
 
+use crate::databases::fs::blocks::Blocks;
 use crate::databases::{
     MB,
     fs::blocks::{self, Block, BlocksMut, ClosedBlock},
@@ -29,6 +30,8 @@ pub enum LogError {
     BlockError(blocks::BlockError),
 }
 
+pub type Result<A> = std::result::Result<A, LogError>;
+
 impl From<blocks::BlockError> for LogError {
     fn from(value: blocks::BlockError) -> Self {
         Self::BlockError(value)
@@ -50,7 +53,7 @@ impl LogSegHeader {
         buf.put_bytes(0, SEGMENT_HEADER_SIZE - buf.len());
     }
 
-    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
+    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self> {
         if bytes.len() < SEGMENT_HEADER_SIZE {
             return Err(LogError::TooSmall);
         }
@@ -106,7 +109,7 @@ impl LogSegFooter {
         }
     }
 
-    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self, LogError> {
+    pub fn try_deserialize_from(mut bytes: Bytes) -> Result<Self> {
         if bytes.remaining() < SEGMENT_FOOTER_SIZE {
             return Err(LogError::TooSmall);
         }
@@ -225,7 +228,7 @@ impl LogRecord {
         buf.finalize()
     }
 
-    pub fn try_deserialize_from(mut bytes: Block) -> Result<Self, LogError> {
+    pub fn try_deserialize_from(mut bytes: Block) -> Result<Self> {
         if bytes.remaining() < RECORD_MIN_SIZE {
             return Err(LogError::TooSmall);
         }
@@ -290,15 +293,19 @@ impl LogSegment {
         self.footer.sealed
     }
 
-    pub fn writer(&self, blocks: BlocksMut) -> Option<LogSegmentWriter> {
+    pub fn record_writer(&self, blocks: BlocksMut) -> Option<LogSegmentRecordWriter> {
         if self.is_sealed() {
             return None;
         }
 
-        Some(LogSegmentWriter {
+        Some(LogSegmentRecordWriter {
             blocks,
             cached_last_lsn: None,
         })
+    }
+
+    pub fn record_reader(&self, blocks: Blocks) -> LogSegmentRecordReader {
+        LogSegmentRecordReader::new(blocks)
     }
 }
 
@@ -328,12 +335,12 @@ impl Ord for LogSegment {
     }
 }
 
-pub struct LogSegmentWriter {
+pub struct LogSegmentRecordWriter {
     blocks: BlocksMut,
     cached_last_lsn: Option<u64>,
 }
 
-impl LogSegmentWriter {
+impl LogSegmentRecordWriter {
     pub fn cached_last_lsn(&self) -> Option<u64> {
         self.cached_last_lsn
     }
@@ -347,5 +354,23 @@ impl LogSegmentWriter {
 
     pub fn finalize(self) -> BlocksMut {
         self.blocks
+    }
+}
+
+pub struct LogSegmentRecordReader {
+    blocks: Blocks,
+}
+
+impl LogSegmentRecordReader {
+    pub fn new(blocks: Blocks) -> Self {
+        Self { blocks }
+    }
+
+    pub fn next_record(&mut self) -> Result<Option<LogRecord>> {
+        if let Some(block) = self.blocks.next_block()? {
+            return Ok(Some(LogRecord::try_deserialize_from(block)?));
+        }
+
+        Ok(None)
     }
 }

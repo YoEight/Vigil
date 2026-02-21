@@ -145,6 +145,11 @@ impl BlocksMut {
         Self { limit, offset, buf }
     }
 
+    #[cfg(test)]
+    pub fn empty(limit: usize) -> Self {
+        Self::new(limit, 0, BytesMut::new())
+    }
+
     pub fn available_space(&self) -> usize {
         self.limit
             .checked_sub(self.offset + self.buf.len())

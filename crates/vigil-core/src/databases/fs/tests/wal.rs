@@ -132,7 +132,7 @@ fn detect_segment_is_sealed() {
 
     let blocks = BlocksMut::new(37, 0, BytesMut::new());
 
-    assert!(segment.writer(blocks).is_none());
+    assert!(segment.record_writer(blocks).is_none());
 }
 
 #[test]
@@ -149,8 +149,50 @@ fn detect_segment_is_full() {
         data: data.clone(),
     };
 
-    let mut writer = segment.writer(blocks).unwrap();
+    let mut writer = segment.record_writer(blocks).unwrap();
     writer.append(&record).unwrap();
 
     insta::assert_yaml_snapshot!(writer.append(&record));
+}
+
+#[test]
+fn log_record_reader_iterator() {
+    let segment = LogSegment::new(0);
+    let blocks = BlocksMut::empty(128);
+
+    let data_1 = Bytes::from_static(&b"Hello"[..]);
+    let data_2 = Bytes::from_static(&b", World!"[..]);
+
+    let mut writer = segment.record_writer(blocks).unwrap();
+
+    writer
+        .append(&LogRecord {
+            lsn: 1,
+            op: LogOp::Put,
+            content_type: LogContentType::Unknown(123),
+            data: data_1.clone(),
+        })
+        .unwrap();
+    writer
+        .append(&LogRecord {
+            lsn: 2,
+            op: LogOp::Delete,
+            content_type: LogContentType::Unknown(255),
+            data: data_2.clone(),
+        })
+        .unwrap();
+
+    let blocks = writer.finalize().freeze();
+
+    let mut reader = segment.record_reader(blocks);
+    let mut records = Vec::new();
+
+    while let Some(record) = reader.next_record().unwrap() {
+        records.push(record);
+    }
+
+    insta::assert_yaml_snapshot!(records);
+
+    assert_eq!(records[0].data, data_1);
+    assert_eq!(records[1].data, data_2);
 }
