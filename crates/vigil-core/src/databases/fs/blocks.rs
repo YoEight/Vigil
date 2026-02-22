@@ -10,6 +10,7 @@ pub enum BlockError {
     WroteTooLittle,
     InvalidBlockFormat,
     NotEnoughDataLeft,
+    OffsetOutOfBound,
 }
 
 pub type Result<A> = std::result::Result<A, BlockError>;
@@ -90,6 +91,7 @@ impl Block {
     }
 }
 
+#[derive(Clone)]
 pub struct Blocks {
     start_offset: usize,
     read: usize,
@@ -131,6 +133,32 @@ impl Blocks {
             data,
         }))
     }
+
+    pub fn at(&self, offset: u32) -> Result<Self> {
+        let offset = offset as usize;
+
+        if offset < self.start_offset || self.start_offset + self.bytes.len() < offset {
+            return Err(BlockError::OffsetOutOfBound);
+        }
+
+        Ok(Self {
+            start_offset: offset,
+            read: 0,
+            bytes: self.bytes.clone().split_off(offset - self.start_offset),
+        })
+    }
+}
+
+#[derive(Serialize)]
+pub struct Midpoint {
+    pub lsn: u64,
+    pub offset: u32,
+}
+
+pub struct BlockMutArgs {
+    pub limit: usize,
+    pub offset: usize,
+    pub last_mid_offset: u32,
 }
 
 #[derive(Serialize)]
@@ -138,16 +166,42 @@ pub struct BlocksMut {
     limit: usize,
     offset: usize,
     buf: BytesMut,
+    mid_freq: u32,
+    last_mid_offset: u32,
+    midpoints: Vec<u32>,
 }
 
 impl BlocksMut {
-    pub fn new(limit: usize, offset: usize, buf: BytesMut) -> Self {
-        Self { limit, offset, buf }
+    pub fn new(args: BlockMutArgs, buf: BytesMut) -> Self {
+        Self {
+            limit: args.limit,
+            offset: args.offset,
+            buf,
+            last_mid_offset: args.last_mid_offset,
+            mid_freq: args.limit as u32 / 10,
+            midpoints: Vec::new(),
+        }
     }
 
     #[cfg(test)]
     pub fn empty(limit: usize) -> Self {
-        Self::new(limit, 0, BytesMut::new())
+        Self::empty_with_offset(limit, 0)
+    }
+
+    #[cfg(test)]
+    pub fn empty_with_offset(limit: usize, offset: usize) -> Self {
+        Self::new(
+            BlockMutArgs {
+                limit,
+                offset,
+                last_mid_offset: 0,
+            },
+            BytesMut::new(),
+        )
+    }
+
+    pub fn midpoints(&self) -> &[u32] {
+        &self.midpoints
     }
 
     pub fn available_space(&self) -> usize {
@@ -164,11 +218,14 @@ impl BlocksMut {
         }
 
         self.buf.reserve(actual_need);
+        let block_start_offset = self.offset + self.buf.len();
         self.buf.put_u32_le(need as u32);
+        let buf_start_offset = self.buf.len();
 
         Ok(OpenedBlock {
             need,
-            start_offset: self.buf.len(),
+            block_start_offset,
+            buf_start_offset,
             inner: self,
             written: 0,
         })
@@ -196,7 +253,8 @@ impl BlocksMut {
 #[derive(Serialize)]
 pub struct OpenedBlock<'a> {
     need: usize,
-    start_offset: usize,
+    block_start_offset: usize,
+    buf_start_offset: usize,
     written: usize,
     inner: &'a mut BlocksMut,
 }
@@ -278,7 +336,7 @@ impl OpenedBlock<'_> {
     }
 
     pub fn written_bytes(&self) -> &[u8] {
-        &self.inner.buf[self.start_offset..(self.start_offset + self.written)]
+        &self.inner.buf[self.buf_start_offset..(self.buf_start_offset + self.written)]
     }
 
     pub fn finalize(self) -> Result<ClosedBlock> {
@@ -287,6 +345,10 @@ impl OpenedBlock<'_> {
         }
 
         self.inner.buf.put_u32_le(self.need as u32);
+        if (self.inner.projected_offset() - self.inner.last_mid_offset) > self.inner.mid_freq {
+            self.inner.midpoints.push(self.block_start_offset as u32);
+            self.inner.last_mid_offset = self.block_start_offset as u32;
+        }
 
         Ok(ClosedBlock(()))
     }

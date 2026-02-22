@@ -25,7 +25,7 @@ fn seg_header_round_trip() {
 #[test]
 fn rec_round_trip() {
     let data = Bytes::from_static(&b"Hello, World!"[..]);
-    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+    let mut blocks = BlocksMut::empty(128);
 
     let expected = LogRecord {
         lsn: 42,
@@ -82,21 +82,21 @@ fn footer_serialization_when_not_sealed() {
 
 #[test]
 fn detect_not_enough_space_zero_offset() {
-    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+    let mut blocks = BlocksMut::empty(128);
 
     insta::assert_yaml_snapshot!(blocks.open(129));
 }
 
 #[test]
 fn detect_not_enough_space_with_offset() {
-    let mut blocks = BlocksMut::new(128, 64, BytesMut::new());
+    let mut blocks = BlocksMut::empty_with_offset(128, 64);
 
     insta::assert_yaml_snapshot!(blocks.open(64));
 }
 
 #[test]
 fn detect_written_too_much() {
-    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+    let mut blocks = BlocksMut::empty(128);
 
     let mut buf = blocks.open(5).unwrap();
 
@@ -105,7 +105,7 @@ fn detect_written_too_much() {
 
 #[test]
 fn detect_written_too_little() {
-    let mut blocks = BlocksMut::new(128, 0, BytesMut::new());
+    let mut blocks = BlocksMut::empty(128);
 
     let mut buf = blocks.open(8).unwrap();
 
@@ -130,7 +130,7 @@ fn detect_segment_is_sealed() {
         },
     };
 
-    let blocks = BlocksMut::new(37, 0, BytesMut::new());
+    let blocks = BlocksMut::empty(37);
 
     assert!(segment.record_writer(blocks).is_none());
 }
@@ -138,7 +138,7 @@ fn detect_segment_is_sealed() {
 #[test]
 fn detect_segment_is_full() {
     let segment = LogSegment::new(0);
-    let blocks = BlocksMut::new(37, 0, BytesMut::new());
+    let blocks = BlocksMut::empty(37);
 
     let data = Bytes::from_static(&b"Hello, World!"[..]);
 
@@ -195,4 +195,94 @@ fn log_record_reader_iterator() {
 
     assert_eq!(records[0].data, data_1);
     assert_eq!(records[1].data, data_2);
+}
+
+#[test]
+fn no_midpoint_added_because_threshold_not_reached() {
+    let segment = LogSegment::new(0);
+    let blocks = BlocksMut::empty(512);
+
+    let data_1 = Bytes::from_static(&b"Hello, World!"[..]);
+    let mut writer = segment.record_writer(blocks).unwrap();
+
+    writer
+        .append(&LogRecord {
+            lsn: 1,
+            op: LogOp::Put,
+            content_type: LogContentType::Unknown(123),
+            data: data_1.clone(),
+        })
+        .unwrap();
+
+    let blocks = writer.finalize();
+
+    insta::assert_yaml_snapshot!(blocks);
+}
+
+#[test]
+fn midpoint_added_because_threshold_reached() {
+    let segment = LogSegment::new(0);
+    let blocks = BlocksMut::empty(128);
+
+    let data_1 = Bytes::from_static(&b"Hello, World!"[..]);
+    let mut writer = segment.record_writer(blocks).unwrap();
+
+    writer
+        .append(&LogRecord {
+            lsn: 1,
+            op: LogOp::Put,
+            content_type: LogContentType::Unknown(123),
+            data: data_1.clone(),
+        })
+        .unwrap();
+
+    let blocks = writer.finalize();
+
+    insta::assert_yaml_snapshot!(blocks);
+}
+
+#[test]
+fn can_retrieve_record_based_on_midpoints_alone() {
+    let segment = LogSegment::new(0);
+    let blocks = BlocksMut::empty(128);
+
+    let data_1 = Bytes::from_static(&b"Hello"[..]);
+    let data_2 = Bytes::from_static(&b", World!"[..]);
+
+    let mut writer = segment.record_writer(blocks).unwrap();
+
+    writer
+        .append(&LogRecord {
+            lsn: 1,
+            op: LogOp::Put,
+            content_type: LogContentType::Unknown(123),
+            data: data_1.clone(),
+        })
+        .unwrap();
+
+    writer
+        .append(&LogRecord {
+            lsn: 2,
+            op: LogOp::Delete,
+            content_type: LogContentType::Unknown(255),
+            data: data_2.clone(),
+        })
+        .unwrap();
+
+    let blocks = writer.finalize();
+
+    insta::assert_yaml_snapshot!(blocks);
+
+    let mp_1 = blocks.midpoints()[0];
+    let mp_2 = blocks.midpoints()[1];
+
+    let blocks = blocks.freeze();
+    let block_1 = blocks.at(mp_1).unwrap().next_block().unwrap().unwrap();
+    let block_2 = blocks.at(mp_2).unwrap().next_block().unwrap().unwrap();
+
+    let record_1 = LogRecord::try_deserialize_from(block_1).unwrap();
+    let record_2 = LogRecord::try_deserialize_from(block_2).unwrap();
+
+    assert_eq!(record_1.data, data_1);
+    assert_eq!(record_2.data, data_2);
 }
