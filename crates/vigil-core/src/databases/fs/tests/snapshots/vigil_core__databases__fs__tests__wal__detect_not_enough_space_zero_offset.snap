@@ -1,0 +1,5 @@
+---
+source: crates/vigil-core/src/databases/fs/tests/wal.rs
+expression: blocks.open(129)
+---
+Err: OutOfSpace
