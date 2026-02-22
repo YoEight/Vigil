@@ -3,6 +3,10 @@ use std::mem;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::Serialize;
 
+pub const MIDPOINT_SECTION_SIZE: usize = 128;
+pub const MIDPOINT_SIZE: usize = mem::size_of::<u64>() + mem::size_of::<u32>();
+pub const MIDPOINT_MAX_COUNT: usize = MIDPOINT_SECTION_SIZE / MIDPOINT_SIZE;
+
 #[derive(Debug, Serialize)]
 pub enum BlockError {
     OutOfSpace,
@@ -11,6 +15,7 @@ pub enum BlockError {
     InvalidBlockFormat,
     NotEnoughDataLeft,
     OffsetOutOfBound,
+    TooManyMidpoints,
 }
 
 pub type Result<A> = std::result::Result<A, BlockError>;
@@ -153,6 +158,45 @@ impl Blocks {
 pub struct Midpoint {
     pub lsn: u64,
     pub offset: u32,
+}
+
+pub struct Midpoints {
+    inner: Vec<Midpoint>,
+}
+
+impl Midpoints {
+    pub fn offset_for_lsn(&self, lns: u64) -> u32 {
+        if self.inner.is_empty() {
+            return 0;
+        }
+
+        match self.inner.binary_search_by(|mid| mid.lsn.cmp(&lns)) {
+            Ok(idx) => self.inner[idx].offset,
+            Err(idx) => self.inner[idx].offset,
+        }
+    }
+
+    pub fn serialize_into(&self, buf: &mut BytesMut) -> Result<()> {
+        if self.inner.len() > MIDPOINT_MAX_COUNT {
+            return Err(BlockError::TooManyMidpoints);
+        }
+
+        buf.reserve(MIDPOINT_SECTION_SIZE);
+        let mut written = 0usize;
+
+        for mid in &self.inner {
+            buf.put_u64_le(mid.lsn);
+            buf.put_u32_le(mid.offset);
+
+            written += size_of::<u64>() + size_of::<u32>();
+        }
+
+        let mid_offset = MIDPOINT_SECTION_SIZE - size_of::<u16>();
+        buf.advance(mid_offset - written);
+        buf.put_u16_le(self.inner.len() as u16);
+
+        Ok(())
+    }
 }
 
 pub struct BlockMutArgs {
